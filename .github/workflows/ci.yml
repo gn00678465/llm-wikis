@@ -1,0 +1,72 @@
+name: CI
+
+# Offline verification pipeline for llm-wikis: format, lint, the full Rust
+# test suite (including the specification-drift test and the platform
+# process-supervisor/process-tree tests), and each platform's own installer
+# verification script.
+#
+# This workflow never invokes the real `claude` or `codex` CLI. Every
+# provider interaction in the test suite goes through `FakeProcessRunner` or
+# a disposable fixture script (a bogus command name, a generated `.cmd`
+# batch shim, or a POSIX shell stand-in) that only ever echoes canned,
+# sanitized text — see docs/verification/llm-wikis-execution.md, Task 8/12
+# checkpoints. (INST-27, PROC-14)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the exact channel plus the rustfmt/clippy
+      # components; rustup (preinstalled on every GitHub-hosted runner image)
+      # auto-installs that pinned toolchain and its components on first use.
+      - name: Materialize pinned toolchain
+        run: rustup show
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # process_supervisor.rs counts live helper-process instances by name
+      # (tasklist / ps), which is only meaningful with no concurrent test
+      # spawning its own helper processes — the whole suite runs
+      # single-threaded, matching every prior task checkpoint in this repo.
+      - name: cargo test --all-targets --all-features -- --test-threads=1
+        run: cargo test --all-targets --all-features -- --test-threads=1
+
+      - name: Verify install.ps1 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tests/installers/verify-install-ps1.ps1
+
+      - name: Verify install.sh (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: sh tests/installers/verify-install-sh.sh

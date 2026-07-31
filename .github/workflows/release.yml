@@ -1,0 +1,196 @@
+name: Release
+
+# Tag-triggered native release build (specification §18.1; plan Task 14
+# Steps 4-9). Never invokes the real `claude` or `codex` CLI (INST-27) --
+# only cargo/rustup/musl-tools/gh and GitHub's own actions run here.
+#
+# Job chain (each stage gates the next; a failure anywhere stops the whole
+# workflow before any GitHub Release is created -- INST-26):
+#   version-check -> quality-gates -> build (3-target matrix) -> checksums
+#   -> attest -> publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version-check:
+    name: tag matches Cargo package version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare tag to `cargo metadata` package version
+        run: |
+          set -eu
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          echo "tag version:    $TAG_VERSION"
+          echo "cargo version:  $CARGO_VERSION"
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME (version $TAG_VERSION) does not match Cargo package version $CARGO_VERSION"
+            exit 1
+          fi
+
+  quality-gates:
+    name: quality gates (${{ matrix.os }})
+    needs: version-check
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --all-targets --all-features -- --test-threads=1
+
+  build:
+    name: build (${{ matrix.asset_name }})
+    needs: quality-gates
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            asset_name: llm-wikis-windows-amd64.exe
+            src_path: target/x86_64-pc-windows-msvc/release/llm-wikis.exe
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            asset_name: llm-wikis-linux-amd64
+            src_path: target/x86_64-unknown-linux-musl/release/llm-wikis
+          - os: macos-15
+            target: aarch64-apple-darwin
+            asset_name: llm-wikis-darwin-arm64
+            src_path: target/aarch64-apple-darwin/release/llm-wikis
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - run: rustup target add ${{ matrix.target }}
+      - name: Install musl-tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Rename output to its exact release asset name
+        shell: bash
+        run: cp "${{ matrix.src_path }}" "${{ matrix.asset_name }}"
+      - name: Native --version smoke test
+        shell: bash
+        run: |
+          set -eu
+          chmod +x "${{ matrix.asset_name }}" || true
+          output="$(./"${{ matrix.asset_name }}" --version)"
+          echo "$output"
+          case "$output" in
+            "llm-wikis 0.1.0"*) ;;
+            *)
+              echo "::error::unexpected --version output: $output"
+              exit 1
+              ;;
+          esac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-asset-${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}
+          if-no-files-found: error
+
+  checksums:
+    name: generate and self-verify SHA256SUMS
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-asset-*
+          path: assets
+          merge-multiple: true
+      - name: Add the two installer scripts to the asset set
+        run: cp install.sh install.ps1 assets/
+      - name: Generate SHA256SUMS
+        working-directory: assets
+        run: |
+          set -eu
+          # IMPORTANT format contract: plain GNU-coreutils TEXT-mode output
+          # (`<hash>  <filename>`, no leading `*`). Do NOT add `-b`/`--binary`
+          # here -- that prefixes each filename with `*`, and install.sh's
+          # `awk -v f="$ASSET" '$2==f {print $1}' SHA256SUMS` lookup does an
+          # exact match against $2, so a `*`-prefixed entry would silently
+          # never match and every install.sh run would fail closed with "no
+          # checksum entry for <asset>".
+          sha256sum llm-wikis-windows-amd64.exe llm-wikis-linux-amd64 llm-wikis-darwin-arm64 install.sh install.ps1 > SHA256SUMS
+          cat SHA256SUMS
+      - name: Self-verify the manifest (tests/release/verify-assets.sh)
+        run: sh tests/release/verify-assets.sh assets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            assets/llm-wikis-windows-amd64.exe
+            assets/llm-wikis-linux-amd64
+            assets/llm-wikis-darwin-arm64
+            assets/install.sh
+            assets/install.ps1
+            assets/SHA256SUMS
+          if-no-files-found: error
+
+  attest:
+    name: artifact attestations
+    needs: checksums
+    runs-on: ubuntu-24.04
+    permissions:
+      # id-token/contents per this task's brief; attestations:write is also
+      # required by actions/attest-build-provenance itself to publish the
+      # attestation to the repository's attestations API.
+      id-token: write
+      contents: read
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: assets
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            assets/llm-wikis-windows-amd64.exe
+            assets/llm-wikis-linux-amd64
+            assets/llm-wikis-darwin-arm64
+            assets/SHA256SUMS
+
+  publish:
+    name: publish GitHub Release
+    needs: attest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: assets
+      - name: Create the immutable release for this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release create "${GITHUB_REF_NAME}" \
+            assets/llm-wikis-windows-amd64.exe \
+            assets/llm-wikis-linux-amd64 \
+            assets/llm-wikis-darwin-arm64 \
+            assets/install.ps1 \
+            assets/install.sh \
+            assets/SHA256SUMS \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes
