@@ -1,0 +1,1 @@
+Synthetic fixture raw source file. Plain text, not Markdown, not parsed.

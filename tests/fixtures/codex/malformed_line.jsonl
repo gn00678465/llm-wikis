@@ -1,0 +1,5 @@
+{"type":"thread.started"}
+{"type":"turn.started"}
+{this is not valid json}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"contract\":\"wiki-query/v1\",\"knowledge_status\":\"grounded\",\"answer\":\"should never surface\",\"citations\":[\"overview\"],\"gaps\":[],\"warnings\":[]}"}}
+{"type":"turn.completed"}

@@ -1,0 +1,7 @@
+{"type":"thread.started"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"mcp_tool_call","server":"codex","tool":"list_mcp_resources","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"mcp_tool_call","server":"codex","tool":"list_mcp_resources","status":"completed","error":null}}
+{"type":"item.started","item":{"id":"item_1","type":"agent_message"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{\"contract\":\"wiki-query/v1\",\"knowledge_status\":\"no_relevant_material\",\"answer\":\"No page content was accessible.\",\"citations\":[],\"gaps\":[\"No relevant page found.\"],\"warnings\":[]}"}}
+{"type":"turn.completed"}

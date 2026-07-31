@@ -1,0 +1,1 @@
+{"type":"result","subtype":"success","is_error":false,"result":"Grounded answer with [[overview]] citation.","structured_output":{"contract":"wiki-query/v1","knowledge_status":"grounded","answer":"Synthetic grounded answer citing [[overview]].","citations":["overview"],"gaps":[],"warnings":[]}}

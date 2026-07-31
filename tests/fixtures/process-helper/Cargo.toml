@@ -1,0 +1,15 @@
+[package]
+name = "process-helper"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Disposable test fixture binary for tests/process_supervisor.rs (plan Task 8 Step 1).
+# Deliberately excluded from the workspace (root Cargo.toml exclude list) so it never
+# affects the production crate's dependency graph or lockfile. No dependencies beyond
+# std: every mode below (echo stdin, flood pipes, spawn a grandchild, sleep, exit
+# nonzero, echo argv) is expressible with std::process/std::io/std::env alone.
+
+[[bin]]
+name = "process-helper"
+path = "src/main.rs"

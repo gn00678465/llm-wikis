@@ -1,0 +1,9 @@
+{"type":"thread.started"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"agent_message"}}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"contract\":\"wiki-query/v1\",\"knowledge_status\":\"no_relevant_material\",\"answer\":\"first draft\",\"citations\":[],\"gaps\":[\"gap one\"],\"warnings\":[]}"}}
+{"type":"item.started","item":{"id":"item_1","type":"agent_message"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{\"contract\":\"wiki-query/v1\",\"knowledge_status\":\"no_relevant_material\",\"answer\":\"second draft\",\"citations\":[],\"gaps\":[\"gap two\"],\"warnings\":[]}"}}
+{"type":"item.started","item":{"id":"item_2","type":"agent_message"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"{\"contract\":\"wiki-query/v1\",\"knowledge_status\":\"grounded\",\"answer\":\"final answer citing [[overview]]\",\"citations\":[\"overview\"],\"gaps\":[],\"warnings\":[]}"}}
+{"type":"turn.completed"}

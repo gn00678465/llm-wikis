@@ -1,0 +1,4 @@
+# Synthetic fixture configuration file. Not read by any production code path;
+# it exists only to give wiki-flat's config/ directory a regular file, mirroring
+# the shape of the real agents-shaped wiki.
+placeholder = true
