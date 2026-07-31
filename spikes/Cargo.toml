@@ -1,0 +1,16 @@
+[package]
+name = "llm-wikis-spikes"
+version = "0.1.0"
+edition = "2024"
+default-run = "llm-wikis-spikes"
+publish = false
+
+[[bin]]
+name = "llm-wikis-spikes"
+path = "src/main.rs"
+
+[dependencies]
+process-wrap = { version = "9.1", features = ["std"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"

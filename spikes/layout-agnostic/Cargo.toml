@@ -1,0 +1,12 @@
+[package]
+name = "layout-agnostic-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Disposable measurement spike. Evidence only — this code must never be copied
+# into production. See .scratch/spec-plan-correction/issues/12-*.md
+
+[dependencies]
+sha2 = "0.10"
+serde_json = "1"
