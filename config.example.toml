@@ -1,0 +1,68 @@
+# llm-wikis example configuration (specification §6).
+#
+# Reproduces the two configured knowledge bases verbatim from specification
+# Section 6. This file documents the shape of a real registry; `llm-wikis config
+# init` does NOT write this file — it writes a minimal template with an empty
+# wiki registry and a commented placeholder wiki block instead.
+#
+# `project_root` and `content_root` resolve relative to this configuration
+# file's own directory, not the caller's project and not the CLI's own
+# repository. An example installed under %APPDATA%, XDG config, or
+# ~/Library/Application Support must not be read as if `../agents` refers to
+# the llm-wikis CLI repository.
+#
+# `content_root` may equal `project_root` exactly (see the "agents" wiki
+# below) — containment is inclusive (specification §6.1).
+
+config_version = 1
+default_agent = "claude"
+
+[providers.claude]
+executable = "claude"
+
+[providers.codex]
+executable = "codex"
+
+[runtime]
+timeout_seconds    = 180
+max_question_bytes = 65536
+max_stdout_bytes   = 1048576
+max_stderr_bytes   = 65536
+
+# content_root equals project_root here: this wiki's skill directories
+# (.claude/skills/, .agents/skills/) live directly under the wiki root itself.
+[wikis.agents]
+title        = "Agents Knowledge Base"
+project_root = "D:/Wikis/agents"
+content_root = "D:/Wikis/agents"
+agents       = ["claude", "codex"]
+query_prompt = "Use the wiki-query skill to answer from this wiki."
+
+[wikis.agents.claude]
+load       = "project_skill"
+entrypoint = "/wiki-query"
+skill_path = ".claude/skills/wiki-query/SKILL.md"
+
+[wikis.agents.codex]
+load       = "project_skill"
+entrypoint = "$wiki-query"
+skill_path = ".agents/skills/wiki-query/SKILL.md"
+
+# content_root is nested inside project_root here (a "wiki" subdirectory),
+# so .claude/ and .agents/ sit as siblings of content_root, not beneath it.
+[wikis.harness-engineering]
+title        = "Harness Engineering"
+project_root = "D:/Wikis/harness-engineering"
+content_root = "D:/Wikis/harness-engineering/wiki"
+agents       = ["claude", "codex"]
+query_prompt = "Use the llm-wiki skill's query workflow to answer from this wiki."
+
+[wikis.harness-engineering.claude]
+load       = "project_skill"
+entrypoint = "/llm-wiki"
+skill_path = ".claude/skills/llm-wiki/SKILL.md"
+
+[wikis.harness-engineering.codex]
+load       = "project_skill"
+entrypoint = "$llm-wiki"
+skill_path = ".agents/skills/llm-wiki/SKILL.md"

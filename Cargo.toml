@@ -1,0 +1,33 @@
+[package]
+name = "llm-wikis"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Query pre-built knowledge-base wikis from Claude Code or Codex CLI, from anywhere."
+license = "MIT"
+repository = "https://github.com/gn00678465/llm-wikis"
+readme = "README.md"
+
+[workspace]
+exclude = ["spikes", "tests/fixtures/process-helper"]
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+process-wrap = { version = "9.1", features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+toml = "0.9"
+
+[dev-dependencies]
+assert_cmd = "2"
+filetime = "0.2"
+predicates = "3"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = "symbols"
