@@ -1,0 +1,7 @@
+{
+  "row_count": 335,
+  "sha256": "043d6eab3132586678f457f5edfacc525f93f4340038ad446e05cd3c5a74e42a",
+  "author": "checklist-author-2026-07-31",
+  "date": "2026-07-31",
+  "canonicalization": "For every checklist row, take the six immutable columns in order (ID, requirement, platform, phase, command_or_inspection, expected_result) as they appear between the pipe delimiters of the markdown table row, with escaped pipe sequences (\\|) restored to a literal '|' and surrounding whitespace trimmed from each cell; join the six values with a single LF and no trailing whitespace; concatenate all rows in file order, each row's joined string followed by exactly one trailing LF; compute SHA-256 over the resulting UTF-8 byte stream."
+}
