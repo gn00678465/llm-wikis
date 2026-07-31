@@ -16,8 +16,11 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
+#[cfg(windows)]
+use std::sync::Arc;
+use std::sync::OnceLock;
+#[cfg(windows)]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use llm_wikis::config::{MapEnv, ProcessEnv};

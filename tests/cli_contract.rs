@@ -1292,7 +1292,7 @@ mod windows_provider_fixture {
     }
 
     struct ProviderFixture {
-        _tmp: TempDir,
+        _tmp: LocalTempDir,
         _wiki_tmp: LocalTempDir,
         wiki_root: PathBuf,
         config_path: PathBuf,
@@ -1300,7 +1300,18 @@ mod windows_provider_fixture {
     }
 
     fn build_provider_fixture(include_schema: bool) -> ProviderFixture {
-        let tmp = tempfile::tempdir().unwrap();
+        // `LocalTempDir` (rooted under this crate's own `target/`), not
+        // `tempfile::tempdir()` (system temp): on a Windows account with a
+        // long username, `%TEMP%` can resolve through an 8.3 short-name path
+        // segment (observed on GitHub Actions Windows runners as
+        // `C:\Users\RUNNER~1\...`), and this fixture's generated `.cmd`
+        // script becomes the configured provider `executable` -- an
+        // absolute path -- which `validate_executable` correctly rejects
+        // if it contains `~` (one of the denylisted shell metacharacters,
+        // spec §6.1). Rooting under `target/` avoids that short-name path
+        // entirely, the same fix `wiki_tmp` below already applies for the
+        // wiki root.
+        let tmp = LocalTempDir::new("provider");
         let wiki_tmp = LocalTempDir::new("wiki");
         let wiki_root = wiki_tmp.path().join("wiki");
         let skill_dir = wiki_root.join(".claude").join("skills").join("wiki-query");
