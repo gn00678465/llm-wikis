@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use llm_wikis::config::{
@@ -35,8 +35,41 @@ const QUERY_PROMPT: &str = "Use the wiki-query skill to answer from this wiki.";
 // Fixture construction
 // ---------------------------------------------------------------------------
 
+/// A disposable directory rooted under this crate's own `target/` -- not
+/// `tempfile::tempdir()` (system temp). See tests/doctor.rs's own
+/// `LocalTempDir` (identical implementation) for the two CI-observed
+/// classes of system-temp breakage (macOS `/var` symlink;
+/// `CONFIG_INVALID`/shell-metacharacters on a subset of Windows CI runs)
+/// this sidesteps. Removed on drop.
+struct LocalTempDir {
+    path: PathBuf,
+}
+
+impl LocalTempDir {
+    fn new(label: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("query-service-test-tmp")
+            .join(format!("{label}-{}-{id}", std::process::id()));
+        fs::create_dir_all(&path).unwrap();
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for LocalTempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 struct Fixture {
-    _tmp: tempfile::TempDir,
+    _tmp: LocalTempDir,
     project_root: PathBuf,
     content_root: PathBuf,
     page_path: PathBuf,
@@ -46,7 +79,7 @@ struct Fixture {
 }
 
 fn build_fixture() -> Fixture {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = LocalTempDir::new("fixture");
     let project_root = tmp.path().join("project");
     let skill_dir = project_root.join(".claude/skills/wiki-query");
     fs::create_dir_all(&skill_dir).unwrap();

@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use llm_wikis::config::{
@@ -30,8 +30,52 @@ const QUERY_PROMPT: &str = "Use the wiki-query skill to answer from this wiki.";
 // Fixture construction (mirrors tests/query_service.rs's conventions)
 // ---------------------------------------------------------------------------
 
+/// A disposable directory rooted under this crate's own `target/` -- not
+/// `tempfile::tempdir()` (system temp). Two independent, CI-observed classes
+/// of breakage come from system temp specifically: on macOS, `$TMPDIR`
+/// resolves under `/var/folders/...`, and `/var` itself is a symlink to
+/// `/private/var` -- `joined_checked`'s per-component special-entry scan
+/// (spec §6.1: "any component ... even when its target would remain
+/// contained") then correctly rejects the *configured* (uncanonicalized)
+/// `project_root`/`content_root` string with `UNSAFE_FILESYSTEM_ENTRY`. On a
+/// Windows CI runner, the observed failure is a config-check
+/// `CONFIG_INVALID: provider executable must not contain shell
+/// metacharacters` on a subset of runs -- consistent with the same class of
+/// runner-temp aliasing already confirmed for `RUNNER~1`-style short names
+/// elsewhere in this suite (tests/cli_contract.rs's own `LocalTempDir`),
+/// even though this session could not pin the exact substring. Rooting
+/// under `target/` (a stable path fixed at compile time, never resolved
+/// through `%TEMP%`/`$TMPDIR`) sidesteps both classes without needing
+/// per-platform special-casing. Removed on drop.
+struct LocalTempDir {
+    path: PathBuf,
+}
+
+impl LocalTempDir {
+    fn new(label: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("doctor-test-tmp")
+            .join(format!("{label}-{}-{id}", std::process::id()));
+        fs::create_dir_all(&path).unwrap();
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for LocalTempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 struct Fixture {
-    _tmp: tempfile::TempDir,
+    _tmp: LocalTempDir,
     project_root: PathBuf,
     content_root: PathBuf,
     skill_dir: PathBuf,
@@ -41,7 +85,7 @@ struct Fixture {
 }
 
 fn build_fixture() -> Fixture {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = LocalTempDir::new("fixture");
     let project_root = tmp.path().join("project");
     let skill_dir = project_root.join(".claude/skills/wiki-query");
     fs::create_dir_all(&skill_dir).unwrap();
