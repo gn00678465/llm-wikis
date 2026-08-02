@@ -256,6 +256,36 @@ fn json_schema_inline() {
     );
 }
 
+/// Regression test: OpenAI's structured-output validator (codex-cli's
+/// `--output-schema`) rejects any `properties` entry that lacks a `"type"`
+/// key, even when a `const`/`enum` constrains it — confirmed live via a
+/// captured-argv replay (`docs/verification/llm-wikis-execution.md` Task 15,
+/// the LIVE-02 root cause: a 400 `invalid_json_schema` API error, "schema
+/// must have a 'type' key", on `properties.contract`). Claude's `--json-schema`
+/// tolerated the missing `type` (LIVE-01/03/09 all passed against it), which
+/// is why this shared schema — used by both adapters — was never caught
+/// until a real Codex live call hit OpenAI's stricter validator. Every
+/// property must carry `"type"`, `contract`/`knowledge_status` included
+/// alongside their existing `const`/`enum`.
+#[test]
+fn every_result_schema_property_has_a_type_key() {
+    let schema_text = schema();
+    let value: serde_json::Value =
+        serde_json::from_str(&schema_text).expect("result_json_schema is valid JSON");
+    let properties = value["properties"]
+        .as_object()
+        .expect("schema has a properties object");
+    assert!(!properties.is_empty(), "schema must declare properties");
+    for (name, prop) in properties {
+        assert!(
+            prop.get("type").is_some(),
+            "property {name:?} is missing a \"type\" key: {prop}"
+        );
+    }
+    assert_eq!(value["properties"]["contract"]["type"], "string");
+    assert_eq!(value["properties"]["knowledge_status"]["type"], "string");
+}
+
 #[test]
 fn no_prompt_in_argv() {
     let content_root = Path::new("D:/Wikis/agents");

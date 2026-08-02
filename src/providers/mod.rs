@@ -423,14 +423,21 @@ pub fn build_prompt(
 /// crate — no schema-generation dependency exists in `Cargo.toml` and this
 /// task cannot add one (root `Cargo.toml` is off-limits). Five fields, add a
 /// generator if the shape grows enough to make hand-sync error-prone.
+///
+/// Every `properties` entry must carry an explicit `"type"` key, even when a
+/// `const`/`enum` already constrains it. Claude's `--json-schema` tolerates a
+/// `const`/`enum`-only property; OpenAI's structured-output validator behind
+/// Codex's `--output-schema` does not and rejects the whole request with a
+/// 400 `invalid_json_schema` error before any model work happens (confirmed
+/// live: `docs/verification/llm-wikis-execution.md` Task 15, LIVE-02).
 pub fn result_json_schema() -> String {
     let schema = serde_json::json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["contract", "knowledge_status", "answer", "citations", "gaps", "warnings"],
         "properties": {
-            "contract": { "const": CONTRACT },
-            "knowledge_status": { "enum": ["grounded", "no_relevant_material"] },
+            "contract": { "type": "string", "const": CONTRACT },
+            "knowledge_status": { "type": "string", "enum": ["grounded", "no_relevant_material"] },
             "answer": { "type": "string", "minLength": 1 },
             "citations": { "type": "array", "items": { "type": "string" } },
             "gaps": { "type": "array", "items": { "type": "string" } },
