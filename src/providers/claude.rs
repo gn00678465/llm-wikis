@@ -147,10 +147,22 @@ pub fn parse_claude_output(
     Ok((result, RawFormat::ClaudeJson))
 }
 
+/// The real Claude CLI's `auth status --json` field name has drifted at
+/// least once in the field (2.1.220 emits `loggedIn`; older/other
+/// documentation names it `authenticated`) — both are accepted so this check
+/// does not fail closed purely on field-name drift across CLI versions.
 #[derive(Debug, Deserialize)]
 struct ClaudeAuthStatusDocument {
     #[serde(default)]
     authenticated: Option<bool>,
+    #[serde(default, rename = "loggedIn")]
+    logged_in: Option<bool>,
+}
+
+impl ClaudeAuthStatusDocument {
+    fn is_authenticated(&self) -> Option<bool> {
+        self.authenticated.or(self.logged_in)
+    }
 }
 
 /// The Claude provider adapter (spec §10.2).
@@ -230,7 +242,7 @@ impl ProviderAdapter for ClaudeAdapter {
                 "claude auth status output was not valid JSON",
             )
         })?;
-        match parsed.authenticated {
+        match parsed.is_authenticated() {
             Some(true) => Ok(AuthStatus::Authenticated),
             Some(false) => Err(AppError::new(
                 ErrorCode::AuthRequired,

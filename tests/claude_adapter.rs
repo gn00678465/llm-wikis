@@ -407,3 +407,33 @@ fn auth_status_probe() {
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::NonzeroExit);
 }
+
+/// Regression test: real Claude CLI 2.1.220's `claude auth status --json`
+/// emits `loggedIn` (verified live, `docs/verification/llm-wikis-execution.md`
+/// Task 15), not the `authenticated` field the parser originally required
+/// exclusively. Both field shapes must be accepted so the check does not fail
+/// closed against a real, current CLI purely on field-name drift, without
+/// dropping support for the `authenticated` shape older fixtures/tests use.
+#[test]
+fn auth_status_probe_accepts_the_real_logged_in_field_shape() {
+    let runner = FakeProcessRunner::new();
+    let adapter = ClaudeAdapter;
+
+    runner.push_response(Ok(completed_outcome(br#"{"loggedIn":true}"#, b"", 0)));
+    adapter
+        .auth_status(&runner, &fake_executable())
+        .expect("loggedIn:true fixture succeeds");
+
+    runner.push_response(Ok(completed_outcome(br#"{"loggedIn":false}"#, b"", 0)));
+    let err = adapter
+        .auth_status(&runner, &fake_executable())
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::AuthRequired);
+
+    // Neither field present: still INVALID_NATIVE_OUTPUT, not a silent pass.
+    runner.push_response(Ok(completed_outcome(br#"{"other":true}"#, b"", 0)));
+    let err = adapter
+        .auth_status(&runner, &fake_executable())
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidNativeOutput);
+}
