@@ -280,12 +280,16 @@ fn timeout_mapping() {
     request.timeout = Duration::from_millis(150);
     let outcome = run(&request).expect("run failed");
     assert_eq!(outcome.termination, TerminationReason::TimedOut);
-    // Windows Job Object termination forces a defined exit code (process-wrap
-    // hardcodes `terminate_job(job, 1)`), not a missing/signal-only status the
-    // way a Unix `SIGKILL` would report — so `exit_code` is `Some`, not `None`,
-    // here. What matters for this row is that the child never exited on its
-    // own: `termination` is `TimedOut`, not `Completed`.
+    // Windows Job Object termination forces a defined exit code
+    // (process-wrap hardcodes `terminate_job(job, 1)`), so `exit_code` is
+    // `Some` there. Unix `SIGKILL` instead reports a signal-only status with
+    // no exit code, so `exit_code` is `None` there. What matters for this row
+    // on both platforms is that the child never exited on its own:
+    // `termination` is `TimedOut`, not `Completed`.
+    #[cfg(windows)]
     assert!(outcome.exit_code.is_some());
+    #[cfg(unix)]
+    assert!(outcome.exit_code.is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -704,6 +708,10 @@ fn resolve_executable_rejects_directory() {
     assert_eq!(err.code, llm_wikis::error::ErrorCode::CliNotFound);
 }
 
+// BatchShim classification is Windows-only by design: src/process.rs only
+// treats .cmd/.bat as ExecutableKind::BatchShim under #[cfg(windows)]; on
+// POSIX the same input resolves to Native, so this test only applies there.
+#[cfg(windows)]
 #[test]
 fn resolve_executable_classifies_cmd_extension_as_batch_shim() {
     let tmp = tempfile::tempdir().unwrap();
