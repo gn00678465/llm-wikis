@@ -15,7 +15,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -365,9 +365,34 @@ impl ProbeWriter for FileProbeStore {
         tmp.flush()
             .map_err(|e| internal_error(format!("cannot flush temp probe file: {e}")))?;
         restrict_to_current_user(tmp.path());
-        tmp.persist(&self.path)
-            .map_err(|e| internal_error(format!("cannot atomically replace probe file: {e}")))?;
-        Ok(())
+
+        // Windows' rename-over-existing (ReplaceFile/MoveFileEx) transiently
+        // returns ERROR_ACCESS_DENIED or ERROR_FILE_NOT_FOUND when two
+        // publishers race to replace the same destination; POSIX rename() has
+        // no such window. Spec §15.1 requires concurrent publishes to all
+        // succeed, so retry a bounded number of times on those transient
+        // kinds before giving up.
+        let mut attempts_left = 20;
+        loop {
+            match tmp.persist(&self.path) {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    attempts_left -= 1;
+                    let transient = matches!(
+                        e.error.kind(),
+                        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
+                    );
+                    if !transient || attempts_left == 0 {
+                        return Err(internal_error(format!(
+                            "cannot atomically replace probe file: {}",
+                            e.error
+                        )));
+                    }
+                    tmp = e.file;
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
     }
 }
 
