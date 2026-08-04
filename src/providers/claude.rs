@@ -73,24 +73,41 @@ pub const DISABLE_ALL_HOOKS_SETTINGS: &str = "{\"disableAllHooks\":true}";
 /// Task 15, "review loop iteration 2"). `--setting-sources` is **not**
 /// used here.
 ///
-/// The corrected, honest trust boundary: the wiki's own project/local
-/// settings **are** loaded (required for skill discovery), but their reach
-/// is bounded by three independent layers rather than by non-loading —
-/// (a) [`DISABLE_ALL_HOOKS_SETTINGS`] disables every hook regardless of
-/// source; (b) `--strict-mcp-config` plus an empty MCP config locks out any
-/// MCP server the settings might declare; (c) `--tools Read,Grep,Glob`
-/// bounds the built-in tool surface regardless of any tool-related setting.
-/// Confirmed live (same checkpoint section): with `--setting-sources`
-/// removed and only `--settings {"disableAllHooks":true}` kept, a project
-/// skill resolved and answered correctly *and* a project-declared
-/// `SessionStart` hook on the same fixture did not fire; a control run with
-/// neither flag confirmed the hook is genuinely live in that fixture, so its
-/// absence under the fix is real suppression, not a fixture artifact.
-/// **Honest residual gaps**: other keys in the wiki's project/local settings
-/// are loaded and are not individually enumerated/denied — only bounded by
-/// layers (a)-(c) above; and no CLI flag disables an admin-managed/
-/// enterprise-policy hook regardless — out of scope, and this project
-/// verified no managed settings exist on its own implementation machine.
+/// The wiki's own project/local settings **are** loaded (required for skill
+/// discovery) — this argv alone is **not** the full trust boundary. Their
+/// reach is bounded by three layers here — (a) [`DISABLE_ALL_HOOKS_SETTINGS`]
+/// disables every hook regardless of source; (b) `--strict-mcp-config` plus
+/// an empty MCP config locks out any MCP server the settings might declare;
+/// (c) `--tools Read,Grep,Glob` bounds the built-in tool surface regardless
+/// of any tool-related setting — **plus a fourth, load-bearing layer outside
+/// this function**: [`crate::config::check_claude_wiki_settings_surface`]
+/// (spec §12/§15 R-29, PR #1 Codex review iteration 3 finding 1) statically
+/// denies any wiki whose settings declare a key beyond a small allowlist
+/// (`enabledPlugins`, `permissions.{allow,deny,defaultMode}`) *before* this
+/// argv is ever built. That check exists because (a)-(c) alone are
+/// insufficient: several documented settings keys neither `hooks` nor
+/// `--tools`-shaped execute a command or widen reach directly —
+/// `apiKeyHelper`, `awsCredentialExport`, `awsAuthRefresh`, `gcpAuthRefresh`,
+/// `otelHeadersHelper`, `statusLine` (all run a configured command),
+/// `permissions.additionalDirectories` (widens read reach beyond
+/// `project_root`), and `env` (can redirect API traffic). Confirmed live: a
+/// wiki declaring `apiKeyHelper` as a command executed it even with
+/// `--settings {"disableAllHooks":true}` present
+/// (`docs/verification/llm-wikis-execution.md`, Task 15 "review loop
+/// iteration 3"). The deny check runs at both `doctor` and `query` time (not
+/// doctor only), closing the TOCTOU window between the two.
+///
+/// **Honest residual gap**: no CLI flag disables an admin-managed/
+/// enterprise-policy hook regardless of any of the above — out of this
+/// project's scope, and this project verified no managed settings exist on
+/// its own implementation machine.
+///
+/// (Earlier history, kept for context rather than deleted: R-27 additionally
+/// passed `--setting-sources user`, intending to exclude the wiki's
+/// project/local settings entirely. That broke the tool's primary load mode
+/// — Claude's project-skill discovery is itself gated on the `project`
+/// setting source — confirmed by a live four-arm experiment, R-28, "review
+/// loop iteration 2". `--setting-sources` is **not** used here.)
 pub fn build_argv(
     content_root: &Path,
     mcp_config_path: &Path,

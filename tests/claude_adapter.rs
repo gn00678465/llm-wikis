@@ -160,9 +160,18 @@ fn exact_argv() {
         OsString::from("--json-schema"),
         OsString::from(&schema_text),
         OsString::from("--settings"),
-        OsString::from(DISABLE_ALL_HOOKS_SETTINGS),
+        // Literal expected string, not `DISABLE_ALL_HOOKS_SETTINGS` (PR #1
+        // Codex review iteration 3 finding 2): pinning against the
+        // production constant only proves internal self-consistency —
+        // flipping the constant to e.g. `{"disableAllHooks":false}` would
+        // keep this assertion green. The literal byte value is what
+        // actually reaches the real `claude` process.
+        OsString::from(r#"{"disableAllHooks":true}"#),
     ];
     assert_eq!(args, expected);
+    // The constant itself must still equal the literal this test pins —
+    // catches the constant and the real argv drifting from each other.
+    assert_eq!(DISABLE_ALL_HOOKS_SETTINGS, r#"{"disableAllHooks":true}"#);
 }
 
 /// Regression test for a review-found vulnerability (PR #1, Codex review
@@ -205,7 +214,8 @@ fn hook_neutralization_settings_flag_present_without_excluding_setting_sources()
     );
     assert_eq!(
         args[schema_pos + 3],
-        OsString::from(DISABLE_ALL_HOOKS_SETTINGS)
+        OsString::from(r#"{"disableAllHooks":true}"#),
+        "literal expected value, not the production constant (iteration 3 finding 2)"
     );
     assert!(
         !args.iter().any(|a| a == "--setting-sources"),

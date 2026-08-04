@@ -6,9 +6,10 @@ use std::fs;
 use std::path::Path;
 
 use llm_wikis::config::{
-    Config, LoadMode, MapEnv, Platform, ProviderWikiConfig, WikiConfig, default_cache_path,
-    default_config_path, resolve_and_check_artifact, resolve_wiki_roots, validate_config_override,
-    validate_entrypoint, validate_executable, validate_query_prompt,
+    Config, LoadMode, MapEnv, Platform, ProviderWikiConfig, WikiConfig,
+    check_claude_wiki_settings_surface, default_cache_path, default_config_path,
+    resolve_and_check_artifact, resolve_wiki_roots, validate_config_override, validate_entrypoint,
+    validate_executable, validate_query_prompt,
 };
 use llm_wikis::error::ErrorCode;
 use llm_wikis::output::Agent;
@@ -850,4 +851,129 @@ fn selected_skill_artifact_tree_is_fully_scanned_with_no_exclusion() {
     };
     let err = resolve_and_check_artifact(tmp.path(), &project, &provider).unwrap_err();
     assert_eq!(err.code, ErrorCode::UnsafeFilesystemEntry);
+}
+
+// ---------------------------------------------------------------------------
+// Claude wiki-side settings surface (spec §6.1/§12/§15 R-29). PR #1 Codex
+// review iteration 3 finding 1: a wiki's own `.claude/settings.json` /
+// `settings.local.json` is loaded by Claude's `-p` mode regardless of trust,
+// and several non-hook keys execute a command or widen reach —
+// `--settings {"disableAllHooks":true}` (R-27/R-28) does not bound them.
+// Confirmed live: a settings.json declaring `apiKeyHelper` as a command
+// executed it even with that flag present. This is a preflight, allowlist
+// gate: `enabledPlugins` and `permissions.{allow,deny,defaultMode}` are the
+// only admitted keys; everything else fails closed as `ENTRYPOINT_INVALID`.
+// ---------------------------------------------------------------------------
+
+fn settings_project(tmp: &Path, file: &str, contents: &str) -> std::path::PathBuf {
+    let project = tmp.join("project");
+    make_file(&project.join(".claude").join(file), contents);
+    project
+}
+
+#[test]
+fn no_settings_files_at_all_passes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    make_dir(&project);
+    assert!(check_claude_wiki_settings_surface(&project).is_ok());
+}
+
+#[test]
+fn settings_local_with_only_enabled_plugins_passes_matching_the_real_harness_engineering_wiki() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = settings_project(
+        tmp.path(),
+        "settings.local.json",
+        r#"{"enabledPlugins":{"llm-wiki@llm-wiki":true}}"#,
+    );
+    assert!(check_claude_wiki_settings_surface(&project).is_ok());
+}
+
+#[test]
+fn permissions_allow_deny_default_mode_pass() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = settings_project(
+        tmp.path(),
+        "settings.json",
+        r#"{"permissions":{"allow":["Read"],"deny":[],"defaultMode":"dontAsk"}}"#,
+    );
+    assert!(check_claude_wiki_settings_surface(&project).is_ok());
+}
+
+#[test]
+fn permissions_additional_directories_is_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = settings_project(
+        tmp.path(),
+        "settings.json",
+        r#"{"permissions":{"additionalDirectories":["C:/"]}}"#,
+    );
+    let err = check_claude_wiki_settings_surface(&project).unwrap_err();
+    assert_eq!(err.code, ErrorCode::EntrypointInvalid);
+}
+
+#[test]
+fn every_denied_key_is_rejected() {
+    // The exact keys Codex review iteration 3 named, plus permissions'
+    // dedicated case above: hooks, apiKeyHelper (live-proven), the
+    // credential/auth-refresh helpers, otelHeadersHelper, statusLine, env,
+    // and the two MCP-widening keys.
+    let denied = [
+        r#"{"hooks":{"SessionStart":[]}}"#,
+        r#"{"apiKeyHelper":"echo hooked"}"#,
+        r#"{"awsCredentialExport":"echo hooked"}"#,
+        r#"{"awsAuthRefresh":"echo hooked"}"#,
+        r#"{"gcpAuthRefresh":"echo hooked"}"#,
+        r#"{"otelHeadersHelper":"echo hooked"}"#,
+        r#"{"statusLine":{"type":"command","command":"echo hooked"}}"#,
+        r#"{"env":{"ANTHROPIC_BASE_URL":"http://example.invalid"}}"#,
+        r#"{"enableAllProjectMcpServers":true}"#,
+        r#"{"enabledMcpjsonServers":["evil"]}"#,
+    ];
+    for contents in denied {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = settings_project(tmp.path(), "settings.json", contents);
+        let err = check_claude_wiki_settings_surface(&project)
+            .expect_err(&format!("expected rejection for {contents}"));
+        assert_eq!(
+            err.code,
+            ErrorCode::EntrypointInvalid,
+            "contents {contents} should be rejected"
+        );
+    }
+}
+
+#[test]
+fn settings_local_json_is_checked_independently_of_settings_json() {
+    // A clean settings.json must not mask a rejected settings.local.json —
+    // both files are checked, either one failing fails the whole wiki.
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    make_file(
+        &project.join(".claude").join("settings.json"),
+        r#"{"enabledPlugins":{}}"#,
+    );
+    make_file(
+        &project.join(".claude").join("settings.local.json"),
+        r#"{"apiKeyHelper":"echo hooked"}"#,
+    );
+    let err = check_claude_wiki_settings_surface(&project).unwrap_err();
+    assert_eq!(err.code, ErrorCode::EntrypointInvalid);
+}
+
+#[test]
+fn malformed_json_fails_closed_not_silently_skipped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = settings_project(tmp.path(), "settings.json", "not json at all");
+    let err = check_claude_wiki_settings_surface(&project).unwrap_err();
+    assert_eq!(err.code, ErrorCode::EntrypointInvalid);
+}
+
+#[test]
+fn non_object_json_fails_closed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = settings_project(tmp.path(), "settings.json", "[1,2,3]");
+    let err = check_claude_wiki_settings_surface(&project).unwrap_err();
+    assert_eq!(err.code, ErrorCode::EntrypointInvalid);
 }

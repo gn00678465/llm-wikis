@@ -564,6 +564,22 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
         }
         match agent {
             Agent::Claude => {
+                // R-29: re-run the same wiki-settings surface check `doctor`
+                // runs, at query time, not only at doctor time. This closes
+                // the TOCTOU gap between "doctor passed" and "query invokes
+                // the provider" -- a wiki's `.claude/settings*.json` can
+                // change between the two (an APM refresh, a hand-edit,
+                // anything) with no mechanism forcing a doctor rerun the way
+                // the skill_fingerprint probe gate forces one for the skill
+                // itself. This check is cheap (two small file reads, no
+                // model quota) so re-running it on every query costs nothing
+                // meaningful.
+                if let Err(e) =
+                    crate::config::check_claude_wiki_settings_surface(&roots.project_root)
+                {
+                    let elapsed = self.elapsed_ms(start);
+                    return Ok(fail(warnings, None, None, e, elapsed));
+                }
                 if let Some(w) = crate::providers::claude::read_scope_broad_warning(
                     &roots.project_root,
                     &roots.content_root,

@@ -377,6 +377,15 @@ fn entrypoint_check(
     if let Err(e) = validate_entrypoint(agent, &provider.entrypoint) {
         return DoctorCheck::fail(CHECK_ENTRYPOINT, e.code, e.message);
     }
+    // R-29: Claude's `-p` mode loads project_root/.claude/settings*.json
+    // regardless of trust or load mode; deny any executable/reach-widening
+    // key before ever invoking the provider (see the function doc for the
+    // full threat and the allowlist rationale).
+    if agent == Agent::Claude
+        && let Err(e) = crate::config::check_claude_wiki_settings_surface(project_root)
+    {
+        return DoctorCheck::fail(CHECK_ENTRYPOINT, e.code, e.message);
+    }
     if provider.load == crate::config::LoadMode::LocalPlugin
         && let Some(plugin_dir_str) = provider.plugin_dir.as_deref()
     {

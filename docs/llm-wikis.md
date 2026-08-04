@@ -443,47 +443,66 @@ layers stack:
    unknown config keys).
 6. Claude runs with `Read,Grep,Glob` only — no Bash, Edit, Write, or web
    tool is exposed.
-7. Claude's wiki-side hooks are neutralized with `--settings
-   {"disableAllHooks":true}` (CLI-supplied settings outrank user/project/
-   local settings, so this holds regardless of source). This closes a real
-   gap: Claude Code's `-p` mode auto-loads and **runs hooks** (SessionStart,
-   PreToolUse, ...) declared by whatever directory it's launched in — the
-   `--tools Read,Grep,Glob` restriction in layer 6 governs only built-in
-   tools, not hook commands, so an unneutralized wiki-side hook is arbitrary
-   shell outside that gate. Confirmed empirically: without this flag, a test
-   hook executed; with it, it did not, and the query still succeeded
-   normally. **The wiki's own `.claude/settings.json`/`settings.local.json`
-   are still loaded** — an earlier version of this fix also excluded them
-   (`--setting-sources user`), but that broke project-skill discovery
-   itself, which depends on that same setting source, so every
-   `project_skill`-mode wiki's entrypoint stopped resolving. The honest
-   trust boundary is therefore: settings load, but their reach is bounded by
-   this hook-disable, by `--strict-mcp-config`'s empty MCP configuration
-   (layer 9 below), and by the `--tools` restriction (layer 6) — not by
-   non-loading. **Honest residual gaps**: other keys in the wiki's settings
-   are loaded and not individually enumerated or denied, only bounded by
-   those three layers; and no CLI flag can disable an admin-managed/
-   enterprise-policy hook regardless — that is out of this project's scope,
-   and the implementation machine has no managed settings.
-8. Codex runs under `--sandbox read-only`; the sandbox is a write-prevention
+7. **A wiki whose `.claude/settings.json`/`settings.local.json` declares
+   any executable or reach-widening key is refused outright** — `doctor` and
+   `query` both fail closed with `ENTRYPOINT_INVALID` before any provider
+   call. This is the load-bearing layer, not the argv flags below: Claude
+   Code's `-p` mode auto-loads these files from the wiki's own
+   `project_root` regardless of trust, and several documented keys beyond
+   `hooks` execute a command or widen reach on their own — `apiKeyHelper`,
+   `awsCredentialExport`, `awsAuthRefresh`, `gcpAuthRefresh`,
+   `otelHeadersHelper`, `statusLine` (all run a configured command),
+   `permissions.additionalDirectories` (widens read reach beyond
+   `project_root`), and `env` (can redirect API traffic). Confirmed live: a
+   wiki declaring `apiKeyHelper` executed it even with `--settings
+   {"disableAllHooks":true}` (below) present. The check is an **allowlist**,
+   not a denylist: only `enabledPlugins` and
+   `permissions.{allow,deny,defaultMode}` are admitted (the real
+   `harness-engineering` wiki has exactly `enabledPlugins`, and keeps
+   working); anything else fails closed, including a setting a future Claude
+   Code release adds that this project has never heard of. The check runs at
+   both `doctor` time and `query` time, so a wiki's settings changing
+   between the two cannot slip past a stale `doctor` pass.
+8. On top of that gate, `--settings {"disableAllHooks":true}` neutralizes
+   every hook from every source for the session (CLI-supplied settings
+   outrank user/project/local settings), `--strict-mcp-config`'s empty MCP
+   configuration (layer 10 below) locks out any MCP server the settings
+   might declare, and the `--tools Read,Grep,Glob` restriction (layer 6)
+   bounds the built-in tool surface regardless of any tool-related setting.
+   These three exist because the wiki's own settings are still loaded
+   (required for skill discovery — excluding them via `--setting-sources
+   user` was tried and found to break every `project_skill`-mode wiki's
+   entrypoint) and layer 7's allowlist is deliberately conservative rather
+   than exhaustive. **Honest residual gap**: no CLI flag can disable an
+   admin-managed/enterprise-policy hook regardless of any of the above —
+   that is out of this project's scope, and the implementation machine has
+   no managed settings.
+9. Codex runs under `--sandbox read-only`; the sandbox is a write-prevention
    guarantee only, not a read-scope limiter (§3.6).
-9. No session persistence on either provider.
-10. An explicitly empty MCP configuration (Claude `--mcp-config`, Codex
+10. No session persistence on either provider.
+11. An explicitly empty MCP configuration (Claude `--mcp-config`, Codex
     `-c mcp_servers={}` plus `--disable browser_use --disable
     computer_use`, since `--ignore-user-config` alone does not exclude
     Codex's bundled `node_repl`-backed MCP surface).
-11. No query-time index generation, regeneration, or repair of any kind.
-12. A provider output schema (`--json-schema`/`--output-schema`)
+12. No query-time index generation, regeneration, or repair of any kind.
+13. A provider output schema (`--json-schema`/`--output-schema`)
     mechanically constrains the result shape.
-13. Timeout and independent stdout/stderr byte caps.
-14. A full-content, before/after SHA-256 snapshot of the protected tree
+14. Timeout and independent stdout/stderr byte caps.
+15. A full-content, before/after SHA-256 snapshot of the protected tree
     (§3.5) — a detection layer, not a substitute for the layers above.
-15. No `llm-wikis` command writes to a knowledge base at all. This covers
+16. No `llm-wikis` command writes to a knowledge base at all. This covers
     every write path `llm-wikis` itself has — it does not, and cannot,
     cover a provider's own lifecycle-hook mechanism running arbitrary code
-    the wiki declares; layer 7 is what neutralizes that for Claude, with
-    the managed-policy exception noted there. Codex has no equivalent
-    project-level hook mechanism in the invocation this wrapper uses.
+    the wiki declares; layers 7-8 are what close and bound that for Claude,
+    with the managed-policy exception noted there. Codex's project-level
+    configuration (including hooks and exec policies under a project
+    `.codex/` directory) is loaded only for a **trusted** project, and this
+    wrapper's invocation never establishes trust — Codex fails closed on
+    this by its own design, so no equivalent `llm-wikis`-side gate exists
+    for it (verified by design/documentation, not by a live exploit
+    attempt: neither registered wiki's `.codex/`/`.agents/` directory
+    presently contains any hooks, config, or execpolicy files to test
+    against).
 
 ### 3.5 Mutation detection
 
@@ -553,7 +572,7 @@ paid call per wiki/agent pair you verify this way.
 | `WIKI_INVALID` | `content_root` is missing, not a directory, or has zero `.md` files anywhere beneath it | Point `content_root` at a real directory that actually contains the wiki's Markdown pages |
 | `WIKI_SCHEMA_ABSENT` (warning, not a failure) | No `SCHEMA.md` at `content_root` | **Usually means `content_root` points one level too high** (or, less often, one level too low) — most wiki toolchains put `SCHEMA.md` at the wiki root, so this is an expensive-not-fatal hint to re-check the exact directory, not something you need to fix to proceed |
 | `PROVIDER_CONFIG_MISSING` / `AGENT_UNSUPPORTED` | Wiki enables an agent with no matching `[providers.<agent>]` table, or a wiki you queried never enabled that agent at all | Add the global provider table, or use an agent the wiki actually enables |
-| `ENTRYPOINT_INVALID` | Entrypoint syntax is wrong, or the statically-addressable skill/plugin file doesn't exist where configured | Check `/name`, `/plugin:skill`, or `$name` syntax; check `skill_path`/`plugin_dir` resolve to a real file |
+| `ENTRYPOINT_INVALID` | Entrypoint syntax is wrong, the statically-addressable skill/plugin file doesn't exist where configured, or — Claude only — the wiki's own `.claude/settings.json`/`settings.local.json` declares a key outside the small admitted allowlist (§3.4 layer 7) | Check `/name`, `/plugin:skill`, or `$name` syntax; check `skill_path`/`plugin_dir` resolve to a real file; for the settings case, the message names the rejected key — remove it from the wiki's settings, or (for `enabledPlugins`/`permissions.{allow,deny,defaultMode}`) confirm it's spelled exactly right |
 | `CLI_NOT_FOUND` | The configured provider executable isn't resolvable | Check `providers.<agent>.executable`, install/PATH the provider CLI |
 | `AUTH_REQUIRED` | The provider's own status command reports logged out | Log in to that provider CLI directly (`claude`/`codex` login flow) — `llm-wikis` never handles credentials itself |
 | `ENTRYPOINT_UNVERIFIED` | No current live-doctor probe for this exact fingerprint | Run `doctor --wiki <id> --agent <agent> --live` (§2.9) |

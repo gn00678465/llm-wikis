@@ -766,6 +766,108 @@ pub fn resolve_and_check_artifact(
     }
 }
 
+/// Top-level `.claude/settings.json`/`settings.local.json` keys admitted at a
+/// wiki's `project_root` (spec §6.1/§12 R-29). Everything else fails closed —
+/// see [`check_claude_wiki_settings_surface`] for why this is an allowlist,
+/// not a denylist.
+const ALLOWED_WIKI_SETTINGS_KEYS: &[&str] = &["enabledPlugins", "permissions"];
+
+/// Keys admitted inside a wiki settings file's `"permissions"` object. `allow`/
+/// `deny`/`defaultMode` are already bounded by `--tools Read,Grep,Glob` and
+/// `--permission-mode dontAsk` (spec §10.2) — they cannot grant a tool this
+/// project's own fixed argv does not expose. `additionalDirectories` is
+/// rejected: it would widen Claude's read reach beyond `project_root`,
+/// falsifying `CLAUDE_READ_SCOPE_BROAD`'s "roots equal ⇒ read reach is
+/// exactly `content_root`" basis (spec §10.2).
+const ALLOWED_WIKI_PERMISSIONS_KEYS: &[&str] = &["allow", "deny", "defaultMode"];
+
+/// Denies a Claude wiki whose `project_root/.claude/settings.json` or
+/// `settings.local.json` declares any executable or reach-widening surface
+/// (spec §6.1/§12/§15 R-29; mirrors the pre-existing `local_plugin`
+/// lifecycle-component rejection in [`crate::probes::check_no_plugin_lifecycle_components`],
+/// which already denies a *plugin's* hooks/MCP/settings by the same
+/// principle — this extends it to the wiki's own project settings).
+///
+/// **Why this check exists at all**: Claude Code's `-p` (print) mode loads
+/// `project_root/.claude/settings.json`/`settings.local.json` from whatever
+/// directory it is launched in, *regardless of trust*, and several
+/// documented keys beyond hooks execute a command or widen reach —
+/// `apiKeyHelper`, `awsCredentialExport`, `awsAuthRefresh`,
+/// `gcpAuthRefresh`, `otelHeadersHelper`, and `statusLine` all run a
+/// configured command; `permissions.additionalDirectories` widens the tool
+/// read/search surface beyond `project_root`; `env` can redirect API traffic
+/// (e.g. `ANTHROPIC_BASE_URL`). `--settings {"disableAllHooks":true}` (spec
+/// §10.2 R-27/R-28) only disables the `hooks` key — it does not bound any of
+/// these. Confirmed live: a wiki declaring `apiKeyHelper` as a command
+/// executed it even with `--settings {"disableAllHooks":true}` present
+/// (`docs/verification/llm-wikis-execution.md`, Task 15 "review loop
+/// iteration 3"). Any command such a key runs under `.claude/`/`.agents/`
+/// is invisible to the mutation snapshot (spec §12 excludes those
+/// directories, covered instead by `skill_fingerprint`), so detection after
+/// the fact cannot be relied on — this must be a preflight gate.
+///
+/// **Allowlist, not denylist, deliberately**: a denylist survives only the
+/// keys enumerated today; a future Claude Code release could add another
+/// executable/reach-widening setting this project has never heard of, and a
+/// denylist would silently admit it. An allowlist (`enabledPlugins`, and
+/// `permissions.{allow,deny,defaultMode}` specifically — see
+/// [`ALLOWED_WIKI_PERMISSIONS_KEYS`]) fails closed on anything new instead.
+/// `enabledPlugins` is admitted because it is data the wiki operator's own
+/// trusted configuration legitimately uses (the real `harness-engineering`
+/// wiki has exactly `{"enabledPlugins":{"llm-wiki@llm-wiki":true}}`, and
+/// resolves its entrypoint through the `project_skill` artifact regardless —
+/// R-28's live four-arm experiment) and does not itself execute anything or
+/// widen reach.
+///
+/// A missing settings file is not an error (most wikis have none). A
+/// present-but-unparseable-as-a-JSON-object file fails closed rather than
+/// being silently skipped, since this project cannot verify it is safe.
+pub fn check_claude_wiki_settings_surface(project_root: &Path) -> Result<(), AppError> {
+    for name in ["settings.json", "settings.local.json"] {
+        let path = project_root.join(".claude").join(name);
+        let text = match fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(entrypoint_invalid(format!(
+                    "wiki .claude/{name} could not be read: {e}"
+                )));
+            }
+        };
+        let value: serde_json::Value = serde_json::from_str(&text).map_err(|_| {
+            entrypoint_invalid(format!(
+                "wiki .claude/{name} is not valid JSON and cannot be safety-checked"
+            ))
+        })?;
+        let obj = value.as_object().ok_or_else(|| {
+            entrypoint_invalid(format!("wiki .claude/{name} is not a JSON object"))
+        })?;
+        for (key, val) in obj {
+            if key == "permissions" {
+                let perms = val.as_object().ok_or_else(|| {
+                    entrypoint_invalid(format!(
+                        "wiki .claude/{name} declares \"permissions\" but it is not an object"
+                    ))
+                })?;
+                for pkey in perms.keys() {
+                    if !ALLOWED_WIKI_PERMISSIONS_KEYS.contains(&pkey.as_str()) {
+                        return Err(entrypoint_invalid(format!(
+                            "wiki .claude/{name} declares a rejected permissions key: {pkey}"
+                        )));
+                    }
+                }
+                continue;
+            }
+            if !ALLOWED_WIKI_SETTINGS_KEYS.contains(&key.as_str()) {
+                return Err(entrypoint_invalid(format!(
+                    "wiki .claude/{name} declares a rejected settings key: {key}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // `config init` (spec §5.1/§5.2)
 // ---------------------------------------------------------------------------

@@ -530,6 +530,76 @@ fn validate_before_spawn() {
 }
 
 // ---------------------------------------------------------------------------
+// R-29: query re-runs the wiki-settings surface check, closing the TOCTOU gap
+// between a passing `doctor` run and a later `query` invocation (PR #1 Codex
+// review iteration 3 finding 1). A forbidden key must fail closed here too,
+// strictly before any provider process is spawned -- proven the same way
+// validate_before_spawn above does: zero queued FakeProcessRunner responses,
+// so reaching a real spawn attempt would panic instead of returning an
+// envelope.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn query_rejects_a_forbidden_claude_wiki_settings_key_before_any_spawn() {
+    let fixture = build_fixture();
+    fs::write(
+        fixture.project_root.join(".claude/settings.json"),
+        br#"{"apiKeyHelper":"echo hooked"}"#,
+    )
+    .unwrap();
+    let config = build_config(&fixture, Agent::Claude);
+    let runner = FakeProcessRunner::new();
+    let probes = FakeProbeReader::new();
+    seed_matching_probe(&probes, &fixture, &config, Agent::Claude);
+    let service = QueryService::new(runner, probes);
+    let request = build_request(
+        &fixture,
+        config,
+        Agent::Claude,
+        b"What does this wiki cover?",
+    );
+    let envelope = service
+        .query(request, QueryMode::Enforced)
+        .expect("Ok envelope");
+
+    assert!(!envelope.ok);
+    assert_eq!(envelope.error.unwrap().code, ErrorCode::EntrypointInvalid);
+    assert_eq!(envelope.child_exit_code, None);
+}
+
+#[test]
+fn query_still_succeeds_when_wiki_settings_declare_only_enabled_plugins() {
+    let fixture = build_fixture();
+    fs::write(
+        fixture.project_root.join(".claude/settings.local.json"),
+        br#"{"enabledPlugins":{"llm-wiki@llm-wiki":true}}"#,
+    )
+    .unwrap();
+    let config = build_config(&fixture, Agent::Claude);
+    let runner = FakeProcessRunner::new();
+    queue_success_probes(&runner, Agent::Claude);
+    runner.push_response(Ok(completed_outcome(
+        &claude_success_stdout("Grounded answer with [[harness-engineering]]."),
+        b"",
+        0,
+    )));
+    let probes = FakeProbeReader::new();
+    seed_matching_probe(&probes, &fixture, &config, Agent::Claude);
+    let service = QueryService::new(runner, probes);
+    let request = build_request(
+        &fixture,
+        config,
+        Agent::Claude,
+        b"What does this wiki cover?",
+    );
+    let envelope = service
+        .query(request, QueryMode::Enforced)
+        .expect("Ok envelope");
+
+    assert!(envelope.ok, "expected success, got {envelope:?}");
+}
+
+// ---------------------------------------------------------------------------
 // Adversarial input (plan Task 10 Step 3)
 // ---------------------------------------------------------------------------
 
