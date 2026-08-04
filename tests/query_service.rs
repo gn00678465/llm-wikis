@@ -541,6 +541,15 @@ fn validate_before_spawn() {
 
 #[test]
 fn query_rejects_a_forbidden_claude_wiki_settings_key_before_any_spawn() {
+    // R-30: the check now runs as late as possible -- immediately before
+    // `invoke` (Step 11), after the version/auth probes (Step 7) and the
+    // fingerprint gate (Step 8), narrowing the check-to-spawn window rather
+    // than checking early and leaving a wide gap. So this fixture queues
+    // exactly the version+auth probe responses (a real spawn, deliberately
+    // allowed) and seeds a matching probe record (so the fingerprint gate
+    // itself passes), then leaves *zero* responses queued beyond that --
+    // proving the settings check aborts strictly before `invoke`'s own
+    // spawn attempt, which would otherwise panic on the empty queue.
     let fixture = build_fixture();
     fs::write(
         fixture.project_root.join(".claude/settings.json"),
@@ -549,6 +558,7 @@ fn query_rejects_a_forbidden_claude_wiki_settings_key_before_any_spawn() {
     .unwrap();
     let config = build_config(&fixture, Agent::Claude);
     let runner = FakeProcessRunner::new();
+    queue_success_probes(&runner, Agent::Claude);
     let probes = FakeProbeReader::new();
     seed_matching_probe(&probes, &fixture, &config, Agent::Claude);
     let service = QueryService::new(runner, probes);

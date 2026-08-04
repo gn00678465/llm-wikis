@@ -766,24 +766,16 @@ pub fn resolve_and_check_artifact(
     }
 }
 
-/// Top-level `.claude/settings.json`/`settings.local.json` keys admitted at a
-/// wiki's `project_root` (spec §6.1/§12 R-29). Everything else fails closed —
-/// see [`check_claude_wiki_settings_surface`] for why this is an allowlist,
-/// not a denylist.
-const ALLOWED_WIKI_SETTINGS_KEYS: &[&str] = &["enabledPlugins", "permissions"];
-
-/// Keys admitted inside a wiki settings file's `"permissions"` object. `allow`/
-/// `deny`/`defaultMode` are already bounded by `--tools Read,Grep,Glob` and
-/// `--permission-mode dontAsk` (spec §10.2) — they cannot grant a tool this
-/// project's own fixed argv does not expose. `additionalDirectories` is
-/// rejected: it would widen Claude's read reach beyond `project_root`,
-/// falsifying `CLAUDE_READ_SCOPE_BROAD`'s "roots equal ⇒ read reach is
-/// exactly `content_root`" basis (spec §10.2).
-const ALLOWED_WIKI_PERMISSIONS_KEYS: &[&str] = &["allow", "deny", "defaultMode"];
+/// The single top-level `.claude/settings.json`/`settings.local.json` key
+/// admitted at a wiki's `project_root` (spec §6.1/§12 R-29, narrowed by
+/// R-30). Everything else fails closed — see
+/// [`check_claude_wiki_settings_surface`] for why this is an allowlist, not
+/// a denylist, and why `permissions` was removed from it.
+const ALLOWED_WIKI_SETTINGS_KEYS: &[&str] = &["enabledPlugins"];
 
 /// Denies a Claude wiki whose `project_root/.claude/settings.json` or
 /// `settings.local.json` declares any executable or reach-widening surface
-/// (spec §6.1/§12/§15 R-29; mirrors the pre-existing `local_plugin`
+/// (spec §6.1/§12/§15 R-29/R-30; mirrors the pre-existing `local_plugin`
 /// lifecycle-component rejection in [`crate::probes::check_no_plugin_lifecycle_components`],
 /// which already denies a *plugin's* hooks/MCP/settings by the same
 /// principle — this extends it to the wiki's own project settings).
@@ -806,27 +798,50 @@ const ALLOWED_WIKI_PERMISSIONS_KEYS: &[&str] = &["allow", "deny", "defaultMode"]
 /// directories, covered instead by `skill_fingerprint`), so detection after
 /// the fact cannot be relied on — this must be a preflight gate.
 ///
+/// **`permissions` was admitted in R-29 and removed in R-30**: R-29 allowed
+/// `permissions.{allow,deny,defaultMode}` reasoning that `--tools
+/// Read,Grep,Glob` bounds *tool names*, which is true but insufficient — a
+/// permission rule such as `{"permissions":{"allow":["Read(/some/path/**)"]}}`
+/// pre-authorizes the exposed `Read` tool against a specific path pattern,
+/// which is not a tool-name concern at all. Rather than enumerate a safe
+/// subset of permission-rule *values* (an open-ended, error-prone parsing
+/// problem), `permissions` is denied entirely, key and values — consistent
+/// with the deny-by-default posture below.
+///
 /// **Allowlist, not denylist, deliberately**: a denylist survives only the
 /// keys enumerated today; a future Claude Code release could add another
 /// executable/reach-widening setting this project has never heard of, and a
-/// denylist would silently admit it. An allowlist (`enabledPlugins`, and
-/// `permissions.{allow,deny,defaultMode}` specifically — see
-/// [`ALLOWED_WIKI_PERMISSIONS_KEYS`]) fails closed on anything new instead.
-/// `enabledPlugins` is admitted because it is data the wiki operator's own
-/// trusted configuration legitimately uses (the real `harness-engineering`
-/// wiki has exactly `{"enabledPlugins":{"llm-wiki@llm-wiki":true}}`, and
-/// resolves its entrypoint through the `project_skill` artifact regardless —
-/// R-28's live four-arm experiment) and does not itself execute anything or
-/// widen reach.
+/// denylist would silently admit it. `enabledPlugins` is the sole admitted
+/// key. It is admissible because plugins resolve from the *operator's own*
+/// user-scope marketplace configuration (`~/.claude`), which a wiki's
+/// project settings cannot add to or redirect — `enabledPlugins` only
+/// toggles on/off a plugin the operator already trusted at the user level;
+/// it cannot introduce a new, wiki-supplied plugin source. Any hooks that
+/// enabled plugin itself declares are still killed by `--settings
+/// {"disableAllHooks":true}` regardless. The real `harness-engineering`
+/// wiki has exactly `{"enabledPlugins":{"llm-wiki@llm-wiki":true}}` and
+/// resolves its entrypoint through the `project_skill` artifact regardless
+/// (R-28's live four-arm experiment) — this key carries no execution or
+/// reach-widening capability of its own, only a boolean toggle over
+/// operator-trusted state. Its *value* is still validated below (every
+/// entry must be a plain boolean) so this key cannot become a smuggling
+/// vector for some other shape in a future settings-format change.
 ///
 /// A missing settings file is not an error (most wikis have none). A
 /// present-but-unparseable-as-a-JSON-object file fails closed rather than
-/// being silently skipped, since this project cannot verify it is safe.
+/// being silently skipped, since this project cannot verify it is safe. A
+/// settings path that is a symlink, junction, reparse point, directory, or
+/// any other non-regular-file entry is rejected as `UNSAFE_FILESYSTEM_ENTRY`
+/// rather than treated as absent — a dangling symlink resolves as "not
+/// found" under a plain existence check, letting its target be created
+/// *after* this check passes and *before* the provider reads it; `.claude/`
+/// is excluded from the recursive special-entry scan elsewhere (spec §6.1),
+/// so nothing else would ever catch this.
 pub fn check_claude_wiki_settings_surface(project_root: &Path) -> Result<(), AppError> {
     for name in ["settings.json", "settings.local.json"] {
         let path = project_root.join(".claude").join(name);
-        let text = match fs::read_to_string(&path) {
-            Ok(t) => t,
+        let md = match fs::symlink_metadata(&path) {
+            Ok(m) => m,
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
             Err(e) => {
                 return Err(entrypoint_invalid(format!(
@@ -834,6 +849,22 @@ pub fn check_claude_wiki_settings_surface(project_root: &Path) -> Result<(), App
                 )));
             }
         };
+        if is_special_entry(&md) {
+            return Err(AppError::new(
+                ErrorCode::UnsafeFilesystemEntry,
+                format!(
+                    "wiki .claude/{name} is a symlink, junction, reparse point, or mount point"
+                ),
+            ));
+        }
+        if !md.is_file() {
+            return Err(entrypoint_invalid(format!(
+                "wiki .claude/{name} is not a regular file"
+            )));
+        }
+        let text = fs::read_to_string(&path).map_err(|e| {
+            entrypoint_invalid(format!("wiki .claude/{name} could not be read: {e}"))
+        })?;
         let value: serde_json::Value = serde_json::from_str(&text).map_err(|_| {
             entrypoint_invalid(format!(
                 "wiki .claude/{name} is not valid JSON and cannot be safety-checked"
@@ -843,25 +874,25 @@ pub fn check_claude_wiki_settings_surface(project_root: &Path) -> Result<(), App
             entrypoint_invalid(format!("wiki .claude/{name} is not a JSON object"))
         })?;
         for (key, val) in obj {
-            if key == "permissions" {
-                let perms = val.as_object().ok_or_else(|| {
-                    entrypoint_invalid(format!(
-                        "wiki .claude/{name} declares \"permissions\" but it is not an object"
-                    ))
-                })?;
-                for pkey in perms.keys() {
-                    if !ALLOWED_WIKI_PERMISSIONS_KEYS.contains(&pkey.as_str()) {
-                        return Err(entrypoint_invalid(format!(
-                            "wiki .claude/{name} declares a rejected permissions key: {pkey}"
-                        )));
-                    }
-                }
-                continue;
-            }
             if !ALLOWED_WIKI_SETTINGS_KEYS.contains(&key.as_str()) {
                 return Err(entrypoint_invalid(format!(
                     "wiki .claude/{name} declares a rejected settings key: {key}"
                 )));
+            }
+            // key == "enabledPlugins": validate its shape rather than trust
+            // it unconditionally, so this admitted key cannot itself become
+            // a smuggling vector for an unexpected value shape.
+            let plugins = val.as_object().ok_or_else(|| {
+                entrypoint_invalid(format!(
+                    "wiki .claude/{name}'s enabledPlugins is not an object"
+                ))
+            })?;
+            for (plugin_name, plugin_value) in plugins {
+                if !plugin_value.is_boolean() {
+                    return Err(entrypoint_invalid(format!(
+                        "wiki .claude/{name}'s enabledPlugins.{plugin_name} value is not a boolean"
+                    )));
+                }
             }
         }
     }

@@ -564,22 +564,6 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
         }
         match agent {
             Agent::Claude => {
-                // R-29: re-run the same wiki-settings surface check `doctor`
-                // runs, at query time, not only at doctor time. This closes
-                // the TOCTOU gap between "doctor passed" and "query invokes
-                // the provider" -- a wiki's `.claude/settings*.json` can
-                // change between the two (an APM refresh, a hand-edit,
-                // anything) with no mechanism forcing a doctor rerun the way
-                // the skill_fingerprint probe gate forces one for the skill
-                // itself. This check is cheap (two small file reads, no
-                // model quota) so re-running it on every query costs nothing
-                // meaningful.
-                if let Err(e) =
-                    crate::config::check_claude_wiki_settings_surface(&roots.project_root)
-                {
-                    let elapsed = self.elapsed_ms(start);
-                    return Ok(fail(warnings, None, None, e, elapsed));
-                }
                 if let Some(w) = crate::providers::claude::read_scope_broad_warning(
                     &roots.project_root,
                     &roots.content_root,
@@ -706,6 +690,27 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
                 ));
             }
         };
+
+        // R-30: re-run the same wiki-settings surface check `doctor` runs,
+        // as late as possible -- immediately before the provider is spawned,
+        // after every other step (version/auth probes, fingerprint gate,
+        // prompt build, before-snapshot) rather than back in Step 6 -- to
+        // narrow the window between "this was checked safe" and "the
+        // provider actually reads it" as much as this wrapper can. This is
+        // a narrowing, not a closure: an attacker who can write to the
+        // wiki's `.claude/` directory between this check and the process
+        // actually starting still wins that race. Eliminating the window
+        // entirely would require OS-level isolation (a filesystem snapshot
+        // held for the duration of the child process, or a mandatory-access-
+        // control policy), which is out of this project's scope; see the
+        // doc comment on `check_claude_wiki_settings_surface` and spec §10.2
+        // R-30 for the full, honestly-stated residual.
+        if agent == Agent::Claude
+            && let Err(e) = crate::config::check_claude_wiki_settings_surface(&roots.project_root)
+        {
+            let elapsed = self.elapsed_ms(start);
+            return Ok(fail(warnings, None, None, e, elapsed));
+        }
 
         // Steps 11-12 (spec §8.1): invoke the provider; timeout/output-cap/
         // process-tree enforcement happens inside the process supervisor.

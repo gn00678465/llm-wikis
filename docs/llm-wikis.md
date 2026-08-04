@@ -326,14 +326,18 @@ excluded from every query and doctor invocation.
 
 ### 2.8 `llm-wikis` never modifies a knowledge base
 
-State this plainly to anyone operating this tool: **`llm-wikis` never
-writes to a registered wiki.** Every invocation is read-only by
-construction (§3.4), and each wiki's own skill is used **exactly as that
-wiki ships it** — no overlay, no patch, no generated file, no installed
-skill. If a wiki's interactive skill would normally offer to save an
-answer or regenerate an index, the external-readonly prompt envelope tells
-it not to, and the harness enforces read-only mechanically regardless of
-what the skill's own text says (§3.4, §3.5).
+State this plainly to anyone operating this tool: **`llm-wikis` itself has
+no code path that writes to a registered wiki.** Each wiki's own skill is
+used **exactly as that wiki ships it** — no overlay, no patch, no generated
+file, no installed skill. If a wiki's interactive skill would normally
+offer to save an answer or regenerate an index, the external-readonly
+prompt envelope tells it not to, and several independent, mostly-mechanical
+layers (§3.4) work against a mutation actually reaching disk — not one
+single guarantee, and not, as of this writing, a fully closed one: §3.4
+states each layer's honest residual (a narrowed-not-closed TOCTOU window
+around the Claude wiki-settings check, and settings this project does not
+yet enumerate). The before/after content snapshot (§3.5) still catches any
+mutation that does land, regardless of how it got there.
 
 ### 2.9 Live probes and `ENTRYPOINT_UNVERIFIED`
 
@@ -444,7 +448,7 @@ layers stack:
 6. Claude runs with `Read,Grep,Glob` only — no Bash, Edit, Write, or web
    tool is exposed.
 7. **A wiki whose `.claude/settings.json`/`settings.local.json` declares
-   any executable or reach-widening key is refused outright** — `doctor` and
+   any key other than `enabledPlugins` is refused outright** — `doctor` and
    `query` both fail closed with `ENTRYPOINT_INVALID` before any provider
    call. This is the load-bearing layer, not the argv flags below: Claude
    Code's `-p` mode auto-loads these files from the wiki's own
@@ -456,53 +460,72 @@ layers stack:
    `project_root`), and `env` (can redirect API traffic). Confirmed live: a
    wiki declaring `apiKeyHelper` executed it even with `--settings
    {"disableAllHooks":true}` (below) present. The check is an **allowlist**,
-   not a denylist: only `enabledPlugins` and
-   `permissions.{allow,deny,defaultMode}` are admitted (the real
-   `harness-engineering` wiki has exactly `enabledPlugins`, and keeps
-   working); anything else fails closed, including a setting a future Claude
-   Code release adds that this project has never heard of. The check runs at
-   both `doctor` time and `query` time, so a wiki's settings changing
-   between the two cannot slip past a stale `doctor` pass.
-8. On top of that gate, `--settings {"disableAllHooks":true}` neutralizes
+   not a denylist: **only `enabledPlugins` is admitted**, and its value is
+   validated to be an object of plain booleans (nothing else). An earlier
+   version of this check also admitted `permissions.{allow,deny,defaultMode}`
+   on the reasoning that `--tools Read,Grep,Glob` bounds tool *names* — true,
+   but a permission rule's *value* can still pre-authorize a specific path
+   for the exposed `Read` tool (e.g. `{"permissions":{"allow":["Read(/some/secret/**)"]}}`),
+   which is not a tool-name concern at all; `permissions` is now denied
+   entirely rather than partially validated. `enabledPlugins` is admitted
+   because it only toggles a plugin the operator already trusted at the
+   *user* level (`~/.claude`) — a wiki's project settings cannot use it to
+   introduce a new plugin source of its own. The real `harness-engineering`
+   wiki has exactly `enabledPlugins` and keeps working. Anything else fails
+   closed, including a setting a future Claude Code release adds that this
+   project has never heard of. A settings path that is a symlink, junction,
+   reparse point, directory, or other non-regular-file entry is rejected as
+   `UNSAFE_FILESYSTEM_ENTRY` rather than silently treated as absent — a
+   dangling symlink would otherwise report "not found," pass the check, and
+   let its target be created afterward.
+8. This check runs at both `doctor` time and, as late as this wrapper can
+   arrange — immediately before the provider process is actually spawned,
+   after every other query step — `query` time too, so a wiki's settings
+   changing between a `doctor` pass and a later `query` cannot slip past a
+   stale result. **This narrows the window between "checked safe" and "the
+   provider reads it," it does not close it**: a write to the wiki's
+   `.claude/` directory landing in the instant between this check and the
+   process actually starting still wins that race. Eliminating the window
+   entirely would need OS-level isolation this wrapper does not provide.
+9. On top of layers 7-8, `--settings {"disableAllHooks":true}` neutralizes
    every hook from every source for the session (CLI-supplied settings
    outrank user/project/local settings), `--strict-mcp-config`'s empty MCP
-   configuration (layer 10 below) locks out any MCP server the settings
+   configuration (layer 12 below) locks out any MCP server the settings
    might declare, and the `--tools Read,Grep,Glob` restriction (layer 6)
    bounds the built-in tool surface regardless of any tool-related setting.
-   These three exist because the wiki's own settings are still loaded
-   (required for skill discovery — excluding them via `--setting-sources
-   user` was tried and found to break every `project_skill`-mode wiki's
-   entrypoint) and layer 7's allowlist is deliberately conservative rather
-   than exhaustive. **Honest residual gap**: no CLI flag can disable an
-   admin-managed/enterprise-policy hook regardless of any of the above —
-   that is out of this project's scope, and the implementation machine has
-   no managed settings.
-9. Codex runs under `--sandbox read-only`; the sandbox is a write-prevention
-   guarantee only, not a read-scope limiter (§3.6).
-10. No session persistence on either provider.
-11. An explicitly empty MCP configuration (Claude `--mcp-config`, Codex
+   These exist because the wiki's own settings are still loaded (required
+   for skill discovery — excluding them via `--setting-sources user` was
+   tried and found to break every `project_skill`-mode wiki's entrypoint).
+   **Honest residual gap**: no CLI flag can disable an admin-managed/
+   enterprise-policy hook regardless of any of the above — that is out of
+   this project's scope, and the implementation machine has no managed
+   settings.
+10. Codex runs under `--sandbox read-only`; the sandbox is a write-prevention
+    guarantee only, not a read-scope limiter (§3.6).
+11. No session persistence on either provider.
+12. An explicitly empty MCP configuration (Claude `--mcp-config`, Codex
     `-c mcp_servers={}` plus `--disable browser_use --disable
     computer_use`, since `--ignore-user-config` alone does not exclude
     Codex's bundled `node_repl`-backed MCP surface).
-12. No query-time index generation, regeneration, or repair of any kind.
-13. A provider output schema (`--json-schema`/`--output-schema`)
+13. No query-time index generation, regeneration, or repair of any kind.
+14. A provider output schema (`--json-schema`/`--output-schema`)
     mechanically constrains the result shape.
-14. Timeout and independent stdout/stderr byte caps.
-15. A full-content, before/after SHA-256 snapshot of the protected tree
+15. Timeout and independent stdout/stderr byte caps.
+16. A full-content, before/after SHA-256 snapshot of the protected tree
     (§3.5) — a detection layer, not a substitute for the layers above.
-16. No `llm-wikis` command writes to a knowledge base at all. This covers
+17. No `llm-wikis` command writes to a knowledge base at all. This covers
     every write path `llm-wikis` itself has — it does not, and cannot,
     cover a provider's own lifecycle-hook mechanism running arbitrary code
-    the wiki declares; layers 7-8 are what close and bound that for Claude,
-    with the managed-policy exception noted there. Codex's project-level
-    configuration (including hooks and exec policies under a project
-    `.codex/` directory) is loaded only for a **trusted** project, and this
-    wrapper's invocation never establishes trust — Codex fails closed on
-    this by its own design, so no equivalent `llm-wikis`-side gate exists
-    for it (verified by design/documentation, not by a live exploit
-    attempt: neither registered wiki's `.codex/`/`.agents/` directory
-    presently contains any hooks, config, or execpolicy files to test
-    against).
+    the wiki declares; layers 7-9 are what bound (not eliminate — see layer
+    8's stated TOCTOU residual) that for Claude, with the managed-policy
+    exception noted in layer 9. Codex's project-level configuration
+    (including hooks and exec policies under a project `.codex/` directory)
+    is loaded only for a **trusted** project, and this wrapper's invocation
+    never establishes trust — Codex fails closed on this by its own design,
+    so no equivalent `llm-wikis`-side gate exists for it (verified by
+    design/documentation, not by a live exploit attempt: neither registered
+    wiki's `.codex/`/`.agents/` directory presently contains any hooks,
+    config, or execpolicy files to test against).
 
 ### 3.5 Mutation detection
 
@@ -510,15 +533,31 @@ Before invoking the provider, `llm-wikis` walks the complete canonical
 `content_root` (every directory and regular file — schema, config,
 executable helpers/hooks, raw/assets, index/log/overview files, every page,
 any compiled cache/graph artifact — **except** any `.claude/`/`.agents/`
-directory immediately beneath `content_root`, which is a provider skill
-tree covered by the independent skill-fingerprint mechanism instead) and
-records each entry's type, and for regular files, byte length and a
-streaming SHA-256 digest. It repeats the walk after the provider exits and
-compares. Any addition, removal, type change, or same-size content rewrite
-(even with a preserved timestamp) is `READ_ONLY_VIOLATION` (exit `7`); the
-sorted list of changed relative paths is reported — never file content.
-This runs on every outcome (success, provider failure, timeout, output
-overflow), so a mutation is caught regardless of what else happened.
+directory immediately beneath `content_root`) and records each entry's
+type, and for regular files, byte length and a streaming SHA-256 digest. It
+repeats the walk after the provider exits and compares. Any addition,
+removal, type change, or same-size content rewrite (even with a preserved
+timestamp) is `READ_ONLY_VIOLATION` (exit `7`); the sorted list of changed
+relative paths is reported — never file content. This runs on every outcome
+(success, provider failure, timeout, output overflow), so a mutation is
+caught regardless of what else happened.
+
+**What actually covers the excluded `.claude`/`.agents` directories, stated
+precisely rather than as a blanket claim**: the live-probe skill fingerprint
+(§2.9) hashes only the *configured skill's own directory* — for
+`project_skill`, the skill file's parent directory (e.g.
+`.claude/skills/wiki-query/`), not the whole `.claude/` tree; for
+`local_plugin`, the whole configured `plugin_dir`, which is typically a
+separate directory outside `content_root` entirely, referenced by the
+`plugin_dir` config value, not `.claude/` itself. Separately, for Claude
+wikis specifically, `project_root/.claude/settings.json` and
+`settings.local.json` are covered by the settings-surface deny check (§3.4
+layer 7) — an allowlist gate, not a hash-based change-detector. **Neither
+mechanism covers every other file that could exist under `.claude/`/`.agents/`**
+(other skills, slash commands, cached plugin data, anything not the one
+configured skill or the two named settings files) — those remain outside
+both the mutation snapshot and the fingerprint, a genuine gap, not one this
+project currently closes.
 
 ### 3.6 Read-scope warnings and the OS-sandbox recommendation
 
@@ -568,7 +607,7 @@ paid call per wiki/agent pair you verify this way.
 |---|---|---|
 | `CONFIG_INVALID` / `CONFIG_EXISTS` | Registry TOML is malformed, has an unknown key, or `config init`'s destination already exists | Fix the TOML; use a different `--config` path or hand-edit the existing file — `config init` never overwrites |
 | `WIKI_NOT_ALLOWED` | The `--wiki` ID isn't in the registry | Check `llm-wikis list`; add the wiki to the config |
-| `PATH_OUTSIDE_ALLOWED_ROOT` / `UNSAFE_FILESYSTEM_ENTRY` | A configured path resolves outside its declared root, or a symlink/junction/reparse/mount was found in a scanned tree | Fix the offending path in config; do not symlink inside a monitored tree (the one exception is `.claude/`/`.agents/` immediately under `content_root`, covered by skill fingerprinting instead) |
+| `PATH_OUTSIDE_ALLOWED_ROOT` / `UNSAFE_FILESYSTEM_ENTRY` | A configured path resolves outside its declared root, or a symlink/junction/reparse/mount was found in a scanned tree — including, for a Claude wiki, at `.claude/settings.json`/`settings.local.json` itself (§3.4 layer 7) | Fix the offending path in config; do not symlink inside a monitored tree, the configured skill directory, or (Claude) the wiki's settings files |
 | `WIKI_INVALID` | `content_root` is missing, not a directory, or has zero `.md` files anywhere beneath it | Point `content_root` at a real directory that actually contains the wiki's Markdown pages |
 | `WIKI_SCHEMA_ABSENT` (warning, not a failure) | No `SCHEMA.md` at `content_root` | **Usually means `content_root` points one level too high** (or, less often, one level too low) — most wiki toolchains put `SCHEMA.md` at the wiki root, so this is an expensive-not-fatal hint to re-check the exact directory, not something you need to fix to proceed |
 | `PROVIDER_CONFIG_MISSING` / `AGENT_UNSUPPORTED` | Wiki enables an agent with no matching `[providers.<agent>]` table, or a wiki you queried never enabled that agent at all | Add the global provider table, or use an agent the wiki actually enables |

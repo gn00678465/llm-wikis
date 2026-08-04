@@ -511,6 +511,32 @@ fn try_symlink_dir(target: &Path, link: &Path) -> bool {
     }
 }
 
+#[cfg(windows)]
+fn try_symlink_file(target: &Path, link: &Path) -> bool {
+    match std::os::windows::fs::symlink_file(target, link) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!(
+                "SKIP: cannot create file-symlink fixture {} -> {} ({e}); Windows developer mode or an elevated privilege is required",
+                link.display(),
+                target.display()
+            );
+            false
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn try_symlink_file(target: &Path, link: &Path) -> bool {
+    match std::os::unix::fs::symlink(target, link) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("SKIP: cannot create file-symlink fixture ({e})");
+            false
+        }
+    }
+}
+
 /// A minimal `WikiConfig` for path-resolution tests, which only look at
 /// `project_root`/`content_root` — the other fields are structurally required
 /// but semantically irrelevant here.
@@ -891,14 +917,20 @@ fn settings_local_with_only_enabled_plugins_passes_matching_the_real_harness_eng
 }
 
 #[test]
-fn permissions_allow_deny_default_mode_pass() {
+fn permissions_key_is_rejected_entirely_even_with_only_benign_looking_values() {
+    // R-30: `permissions` was admitted in R-29 (reasoning: --tools bounds
+    // tool *names*) and removed entirely after Codex review iteration 4
+    // finding 1 showed rule *values* (e.g. a path-qualified allow rule) are
+    // not bounded by that at all. The key is denied outright now, even for
+    // a shape that looks harmless.
     let tmp = tempfile::tempdir().unwrap();
     let project = settings_project(
         tmp.path(),
         "settings.json",
         r#"{"permissions":{"allow":["Read"],"deny":[],"defaultMode":"dontAsk"}}"#,
     );
-    assert!(check_claude_wiki_settings_surface(&project).is_ok());
+    let err = check_claude_wiki_settings_surface(&project).unwrap_err();
+    assert_eq!(err.code, ErrorCode::EntrypointInvalid);
 }
 
 #[test]
@@ -909,6 +941,74 @@ fn permissions_additional_directories_is_rejected() {
         "settings.json",
         r#"{"permissions":{"additionalDirectories":["C:/"]}}"#,
     );
+    let err = check_claude_wiki_settings_surface(&project).unwrap_err();
+    assert_eq!(err.code, ErrorCode::EntrypointInvalid);
+}
+
+#[test]
+fn permissions_allow_with_a_path_qualified_rule_is_rejected() {
+    // The exact escape Codex review iteration 4 finding 1 named:
+    // --tools Read,Grep,Glob bounds tool *names*, not the path a
+    // permission rule pre-authorizes for the exposed Read tool.
+    let tmp = tempfile::tempdir().unwrap();
+    let project = settings_project(
+        tmp.path(),
+        "settings.json",
+        r#"{"permissions":{"allow":["Read(C:/Users/alice/.ssh/**)"]}}"#,
+    );
+    let err = check_claude_wiki_settings_surface(&project).unwrap_err();
+    assert_eq!(err.code, ErrorCode::EntrypointInvalid);
+}
+
+#[test]
+fn enabled_plugins_with_a_non_boolean_value_is_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = settings_project(
+        tmp.path(),
+        "settings.json",
+        r#"{"enabledPlugins":{"llm-wiki@llm-wiki":"yes"}}"#,
+    );
+    let err = check_claude_wiki_settings_surface(&project).unwrap_err();
+    assert_eq!(err.code, ErrorCode::EntrypointInvalid);
+}
+
+#[test]
+fn enabled_plugins_that_is_not_an_object_is_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = settings_project(tmp.path(), "settings.json", r#"{"enabledPlugins":true}"#);
+    let err = check_claude_wiki_settings_surface(&project).unwrap_err();
+    assert_eq!(err.code, ErrorCode::EntrypointInvalid);
+}
+
+#[test]
+fn a_symlinked_settings_json_is_rejected_as_unsafe_not_treated_as_absent() {
+    // Codex review iteration 4 finding 2 fix (b): a dangling symlink at
+    // .claude/settings.json resolves as "not found" under a plain
+    // existence check, letting its target be created *after* this check
+    // and *before* the provider reads it. .claude/ is excluded from the
+    // recursive special-entry scan (spec §6.1), so nothing else would ever
+    // catch this -- the settings check itself must use symlink_metadata
+    // and reject any non-regular-file entry outright.
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    make_dir(&project.join(".claude"));
+    // A dangling symlink (target does not exist yet) is the sharper proof:
+    // a plain fs::read_to_string/existence check would report NotFound and
+    // silently pass, exactly the bug this fix closes.
+    let target = tmp.path().join("does-not-exist-yet.json");
+    let link = project.join(".claude").join("settings.json");
+    if !try_symlink_file(&target, &link) {
+        return;
+    }
+    let err = check_claude_wiki_settings_surface(&project).unwrap_err();
+    assert_eq!(err.code, ErrorCode::UnsafeFilesystemEntry);
+}
+
+#[test]
+fn a_settings_json_that_is_a_directory_is_rejected_not_silently_skipped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    make_dir(&project.join(".claude").join("settings.json"));
     let err = check_claude_wiki_settings_surface(&project).unwrap_err();
     assert_eq!(err.code, ErrorCode::EntrypointInvalid);
 }
