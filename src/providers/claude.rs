@@ -373,7 +373,25 @@ impl ProviderAdapter for ClaudeAdapter {
             cancel: None,
         }) {
             Ok(o) => o,
-            Err(e) => return no_child_outcome(e),
+            // PR #1 Codex review iteration 8 finding 1: `no_child_outcome`
+            // unconditionally sets `claude_enabled_plugins_declared: false`,
+            // which is correct for the three call sites above (none of them
+            // have run the authoritative check yet) but was wrong here --
+            // the check above already ran and determined this wiki's
+            // settings declare `enabledPlugins`; a spawn failure at this
+            // point must not silently revert that back to `false` and drop
+            // the warning the operator was promised. Construct the outcome
+            // directly instead of delegating to `no_child_outcome`, so the
+            // already-authoritative boolean survives this failure path too.
+            Err(e) => {
+                return InvokeOutcome {
+                    model_result: Err(e),
+                    child_exit_code: None,
+                    raw_format: None,
+                    diagnostics: Vec::new(),
+                    claude_enabled_plugins_declared,
+                };
+            }
         };
         let child_exit_code = outcome.exit_code;
         if let Err(e) = map_termination(

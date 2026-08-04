@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use llm_wikis::error::ErrorCode;
+use llm_wikis::error::{AppError, ErrorCode};
 use llm_wikis::output::RawFormat;
 use llm_wikis::process::{ExecutableKind, ResolvedExecutable};
 use llm_wikis::providers::claude::{
@@ -444,6 +444,49 @@ fn cwd_is_project_root() {
     let captured = runner.captured_requests();
     assert_eq!(captured.len(), 1);
     assert_eq!(captured[0].cwd, distinct_project_root);
+}
+
+#[test]
+fn spawn_failure_after_authoritative_check_still_reports_enabled_plugins_declared() {
+    // PR #1 Codex review iteration 8 finding 1: `no_child_outcome` unconditionally
+    // sets `claude_enabled_plugins_declared: false` (correct for the three call
+    // sites that run before the authoritative settings check), but the fourth
+    // call site -- the `runner.run` spawn attempt itself -- runs *after* that
+    // check has already determined the wiki's settings declare `enabledPlugins`.
+    // Routing a spawn failure through `no_child_outcome` there silently reverted
+    // an already-`true` value back to `false`, dropping the
+    // `CLAUDE_ENABLED_PLUGINS_DECLARED` warning the operator was promised on
+    // exactly the query that needed it (a failed one, worth investigating).
+    let runner = FakeProcessRunner::new();
+    runner.push_response(Err(AppError::new(
+        ErrorCode::InternalError,
+        "simulated spawn failure",
+    )));
+    let adapter = ClaudeAdapter;
+    let mut request = provider_request(fake_executable());
+    let project_root = scratch_root().join("spawn-failure-enabled-plugins-project-root");
+    fs::create_dir_all(project_root.join(".claude")).unwrap();
+    fs::write(
+        project_root.join(".claude/settings.local.json"),
+        br#"{"enabledPlugins":{"x@y":true}}"#,
+    )
+    .unwrap();
+    request.project_root = project_root.clone();
+    request.content_root = project_root.clone();
+    request.configured_roots = vec![project_root];
+
+    let outcome = adapter.invoke(&runner, request, "test prompt".to_string());
+
+    assert!(
+        outcome.model_result.is_err(),
+        "expected the simulated spawn failure to surface as an error"
+    );
+    assert!(
+        outcome.claude_enabled_plugins_declared,
+        "the authoritative settings check already found enabledPlugins declared before \
+         the spawn was attempted -- a subsequent spawn failure must not silently revert \
+         that back to false"
+    );
 }
 
 #[test]
