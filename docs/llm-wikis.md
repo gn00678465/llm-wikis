@@ -30,8 +30,10 @@ script to install a specific version instead — this pins, upgrades, or
 downgrades in place:
 
 ```sh
-LLM_WIKIS_VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/gn00678465/llm-wikis/refs/heads/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/gn00678465/llm-wikis/refs/heads/main/install.sh | LLM_WIKIS_VERSION=v0.1.0 sh
 ```
+
+(The variable must be scoped to `sh` — the process that actually reads it — not to `curl`. `LLM_WIKIS_VERSION=v0.1.0 curl ... | sh` sets the variable only for `curl`'s environment and never reaches the piped `sh`.)
 
 ```powershell
 $env:LLM_WIKIS_VERSION = "v0.1.0"

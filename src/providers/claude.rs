@@ -282,7 +282,7 @@ impl ProviderAdapter for ClaudeAdapter {
             )),
             None => Err(AppError::new(
                 ErrorCode::InvalidNativeOutput,
-                "claude auth status output was missing the authenticated field",
+                "claude auth status output was missing both the authenticated and loggedIn fields",
             )),
         }
     }
