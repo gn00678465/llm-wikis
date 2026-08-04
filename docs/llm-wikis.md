@@ -336,8 +336,11 @@ layers (§3.4) work against a mutation actually reaching disk — not one
 single guarantee, and not, as of this writing, a fully closed one: §3.4
 states each layer's honest residual (a narrowed-not-closed TOCTOU window
 around the Claude wiki-settings check, and settings this project does not
-yet enumerate). The before/after content snapshot (§3.5) still catches any
-mutation that does land, regardless of how it got there.
+yet enumerate). The before/after content snapshot (§3.5) catches a
+mutation that lands anywhere in the `content_root` tree it actually
+covers — **except** the two excluded `.claude/`/`.agents/` top-level
+directories (§3.5); a mutation confined entirely to one of those two
+excluded trees would not be caught by this layer.
 
 ### 2.9 Live probes and `ENTRYPOINT_UNVERIFIED`
 
@@ -449,8 +452,15 @@ layers stack:
    tool is exposed.
 7. **A wiki whose `.claude/settings.json`/`settings.local.json` declares
    any key other than `enabledPlugins` is refused outright** — `doctor` and
-   `query` both fail closed with `ENTRYPOINT_INVALID` before any provider
-   call. This is the load-bearing layer, not the argv flags below: Claude
+   `query` both fail closed with `ENTRYPOINT_INVALID` before the actual
+   query is ever answered. This is **not** "before any provider call" in
+   the literal sense: `query`'s bounded, non-billable version and `auth
+   status` probes (spec §8.1 steps 7-8) do invoke the provider executable
+   first — this check runs afterward, authoritatively, immediately before
+   the one call that would actually spawn the provider to answer the
+   question (§10.2 R-31). `doctor`'s own static check runs alongside its
+   own version/auth probes in the same `doctor` call; it does not prevent
+   them. This is the load-bearing layer, not the argv flags below: Claude
    Code's `-p` mode auto-loads these files from the wiki's own
    `project_root` regardless of trust, and several documented keys beyond
    `hooks` execute a command or widen reach on their own — `apiKeyHelper`,
