@@ -441,21 +441,40 @@ layers stack:
    unknown config keys).
 6. Claude runs with `Read,Grep,Glob` only — no Bash, Edit, Write, or web
    tool is exposed.
-7. Codex runs under `--sandbox read-only`; the sandbox is a write-prevention
+7. Claude's wiki-side settings/hooks are neutralized: `--setting-sources
+   user` means the wiki's own (untrusted) `.claude/settings.json` and
+   `settings.local.json` are never loaded at all, and `--settings
+   {"disableAllHooks":true}` additionally disables every hook regardless of
+   source (defense in depth on top of that, since CLI-supplied settings
+   outrank user/project/local ones). This closes a real gap: Claude Code's
+   `-p` mode auto-loads and **runs hooks** (SessionStart, PreToolUse, ...)
+   declared by whatever directory it's launched in — the `--tools
+   Read,Grep,Glob` restriction in layer 6 governs only built-in tools, not
+   hook commands, so an unneutralized wiki-side hook is arbitrary shell
+   outside that gate. Confirmed empirically: without these two flags, a
+   test hook executed; with them, it did not, and the query still succeeded
+   normally. **Honest residual gap**: no CLI flag can disable an
+   admin-managed/enterprise-policy hook — that is out of this project's
+   scope, and the implementation machine has no managed settings.
+8. Codex runs under `--sandbox read-only`; the sandbox is a write-prevention
    guarantee only, not a read-scope limiter (§3.6).
-8. No session persistence on either provider.
-9. An explicitly empty MCP configuration (Claude `--mcp-config`, Codex
-   `-c mcp_servers={}` plus `--disable browser_use --disable
-   computer_use`, since `--ignore-user-config` alone does not exclude
-   Codex's bundled `node_repl`-backed MCP surface).
-10. No query-time index generation, regeneration, or repair of any kind.
-11. A provider output schema (`--json-schema`/`--output-schema`)
+9. No session persistence on either provider.
+10. An explicitly empty MCP configuration (Claude `--mcp-config`, Codex
+    `-c mcp_servers={}` plus `--disable browser_use --disable
+    computer_use`, since `--ignore-user-config` alone does not exclude
+    Codex's bundled `node_repl`-backed MCP surface).
+11. No query-time index generation, regeneration, or repair of any kind.
+12. A provider output schema (`--json-schema`/`--output-schema`)
     mechanically constrains the result shape.
-12. Timeout and independent stdout/stderr byte caps.
-13. A full-content, before/after SHA-256 snapshot of the protected tree
+13. Timeout and independent stdout/stderr byte caps.
+14. A full-content, before/after SHA-256 snapshot of the protected tree
     (§3.5) — a detection layer, not a substitute for the layers above.
-14. No `llm-wikis` command writes to a knowledge base at all — there is no
-    write path to disable.
+15. No `llm-wikis` command writes to a knowledge base at all. This covers
+    every write path `llm-wikis` itself has — it does not, and cannot,
+    cover a provider's own lifecycle-hook mechanism running arbitrary code
+    the wiki declares; layer 7 is what neutralizes that for Claude, with
+    the managed-policy exception noted there. Codex has no equivalent
+    project-level hook mechanism in the invocation this wrapper uses.
 
 ### 3.5 Mutation detection
 

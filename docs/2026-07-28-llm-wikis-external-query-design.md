@@ -1,8 +1,8 @@
 # LLM Wikis External Query Design
 
-Date: 2026-07-28 (amended 2026-07-30, corrected 2026-07-31)  
-Version: 0.2.3  
-Status: user-approved design; revised after three independent review passes; amended 2026-07-30 against two real knowledge bases with measured evidence; corrected 2026-07-31 after an independent three-pass re-review (0 blockers — see §23, 0.2.1); Codex MCP-exclusion and per-provider constraint corrections from instrumented Phase 0 live evidence, user-approved (§23, 0.2.2 and 0.2.3)  
+Date: 2026-07-28 (amended 2026-07-30, corrected 2026-07-31, corrected 2026-08-04)  
+Version: 0.2.4  
+Status: user-approved design; revised after three independent review passes; amended 2026-07-30 against two real knowledge bases with measured evidence; corrected 2026-07-31 after an independent three-pass re-review (0 blockers — see §23, 0.2.1); Codex MCP-exclusion and per-provider constraint corrections from instrumented Phase 0 live evidence, user-approved (§23, 0.2.2 and 0.2.3); Claude wiki-side hook-neutralization correction from a Task 15 PR review finding, user-approved (§23, 0.2.4)  
 Project root: `<root>`
 
 > **Section numbering is stable.** §6.5 and §9 were removed in 0.2.0 but their headings are retained
@@ -571,6 +571,8 @@ claude
   --mcp-config <generated-empty-config>
   --output-format json
   --json-schema <inline-result-schema>
+  --setting-sources user
+  --settings {"disableAllHooks":true}
 ```
 
 For `local_plugin`, add:
@@ -594,6 +596,8 @@ Requirements:
 `--json-schema` carries the `wiki-query/v1` result shape, which is how §7.2 item 9 is enforced mechanically rather than by prose.
 
 Claude's cwd is `project_root`, so read reach can exceed `content_root`. **When `content_root` is a strict subdirectory of `project_root`**, static doctor and every Claude query emit `CLAUDE_READ_SCOPE_BROAD`: `Claude read tools can inspect the configured project root, not only the selected content root; use an OS sandbox or container for stricter confidentiality.` When the two roots are equal the warning is not emitted, because read reach is exactly `content_root` and the message would be false.
+
+**`--setting-sources`/`--settings` threat and mitigation (R-27)**: because the child's cwd is `project_root`, an untrusted operator-controlled directory this wrapper does not own, Claude Code's `-p` mode auto-loads that directory's `.claude/settings.json`/`settings.local.json` and **executes any hooks they declare** (`SessionStart`, `PreToolUse`, ...) as arbitrary shell — entirely outside the `--tools Read,Grep,Glob` gate, which restricts only built-in tools, not hook commands. `.claude/`/`.agents/` immediately under `content_root` are excluded from the mutation snapshot (§12), so such a hook's writes there would be undetectable by that layer. `--setting-sources user` means only the operator's own trusted `~/.claude` settings are loaded for this session — the wiki-side project/local settings files are never read at all. `--settings {"disableAllHooks":true}` is defense in depth on top of that: CLI-supplied settings outrank user/project/local settings, so this also neutralizes any hook declared by the operator's own `~/.claude` settings or by a configured `--plugin-dir`. **Honest residual gap**: no CLI flag disables an admin-managed/enterprise-policy hook; that class of hook is out of this project's scope, and Phase 0's implementation machine was confirmed to have no managed settings configured.
 
 A pre-implementation live spike must verify the exact current layout of each registered wiki, skill discovery, explicit `content_root`, schema output, zero wiki mutations, and every proposed flag name/value against the implementation machine's recorded Claude Code version. The argument vector in this section is proposed rather than timeless: an unsupported help surface blocks implementation until this specification and plan are corrected and re-reviewed. The successful result becomes a versioned capability fixture; no historical provider version is assumed.
 
@@ -713,6 +717,7 @@ Enforcement layers:
 - stdin question transport;
 - fixed provider arguments;
 - Claude read/search-only tools;
+- Claude wiki-side settings/hooks neutralized (`--setting-sources user`, `--settings {"disableAllHooks":true}`, §10.2 R-27 — the untrusted `project_root` cwd would otherwise auto-load and execute wiki-declared hooks, outside the tool-restriction layer; the honest residual gap is that no flag disables an admin-managed/enterprise-policy hook);
 - Codex read-only sandbox;
 - no session persistence;
 - empty Claude MCP configuration;
@@ -1261,6 +1266,14 @@ This workspace is intentionally not a Git repository. Documentation is written a
 The two registered knowledge bases live in a **different**, already-existing Git repository at `D:\Wikis`. This project never writes to it.
 
 ## 23. Revision History
+
+### 0.2.4 — 2026-08-04
+
+Correction from a Codex-authored code review of PR #1 (Task 15's docs/live-verification pull request), independently verified by the orchestrator before authorization. User-approved.
+
+| ID | Sections | Change | Evidence |
+|---|---|---|---|
+| R-27 | §10.2, §12 | The Claude argv gains `--setting-sources user` and `--settings {"disableAllHooks":true}`, appended immediately after `--json-schema` and before any `local_plugin` `--plugin-dir`. §12's enforcement-layer list gains the corresponding bullet, naming the honest residual gap (admin-managed/enterprise-policy hooks cannot be disabled by any flag). | Claude Code 2.1.220's `-p` mode auto-loads and executes hooks (e.g. `SessionStart`) declared by whatever directory it is launched in — confirmed by official documentation (settings precedence: CLI flags outrank user/project/local; `--setting-sources` accepts `user`/`project`/`local`; `disableAllHooks` is a documented `settings.json` boolean key) and empirically, live, on a disposable scratch fixture (never a registered wiki): the pre-correction argv let a `SessionStart` hook write an arbitrary file containing real session metadata; the identical invocation with the two new flags did not, and the query still completed normally. Recorded in `docs/verification/llm-wikis-execution.md`, Task 15 "review loop iteration 1". |
 
 ### 0.2.3 — 2026-07-31
 

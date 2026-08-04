@@ -14,8 +14,8 @@ use llm_wikis::error::ErrorCode;
 use llm_wikis::output::RawFormat;
 use llm_wikis::process::{ExecutableKind, ResolvedExecutable};
 use llm_wikis::providers::claude::{
-    CLAUDE_READ_SCOPE_BROAD_MESSAGE, ClaudeAdapter, build_argv, parse_claude_output,
-    read_scope_broad_warning,
+    CLAUDE_READ_SCOPE_BROAD_MESSAGE, ClaudeAdapter, DISABLE_ALL_HOOKS_SETTINGS, build_argv,
+    parse_claude_output, read_scope_broad_warning,
 };
 use llm_wikis::providers::{
     FakeProcessRunner, ProviderAdapter, ProviderRequest, completed_outcome,
@@ -159,8 +159,65 @@ fn exact_argv() {
         OsString::from("json"),
         OsString::from("--json-schema"),
         OsString::from(&schema_text),
+        OsString::from("--setting-sources"),
+        OsString::from("user"),
+        OsString::from("--settings"),
+        OsString::from(DISABLE_ALL_HOOKS_SETTINGS),
     ];
     assert_eq!(args, expected);
+}
+
+/// Regression test for a review-found vulnerability (PR #1, Codex review
+/// finding 1, `docs/verification/llm-wikis-execution.md` Task 15 "review
+/// loop iteration 1"): the child's cwd is the wiki's own `project_root`
+/// (`src/providers/claude.rs::invoke`), so Claude Code 2.1.220's `-p` mode
+/// auto-loads that untrusted directory's `.claude/settings.json` /
+/// `settings.local.json` and **runs any hooks they declare** (SessionStart,
+/// PreToolUse, ...) — arbitrary shell, entirely outside the `--tools
+/// Read,Grep,Glob` gate, which restricts only built-in tools, not hook
+/// commands. `.claude/`/`.agents/` immediately under `content_root` are also
+/// excluded from the mutation snapshot (spec §12), so a hook's writes there
+/// are undetectable. Empirically confirmed live (checkpoint): the old argv
+/// (without these two flags) let a SessionStart hook write an arbitrary file
+/// with real session metadata; the new argv (with them) did not, and the
+/// query still succeeded normally.
+///
+/// `--setting-sources user` means only the operator's own `~/.claude`
+/// settings are read — the untrusted wiki-side project/local settings files
+/// are never loaded at all. `--settings {"disableAllHooks":true}` is
+/// defense in depth on top of that: CLI-supplied settings outrank
+/// user/project/local settings, so this also neutralizes any hook the
+/// operator's own `~/.claude` settings or a `--plugin-dir` might declare.
+#[test]
+fn hook_neutralization_flags_present_and_ordered_after_json_schema() {
+    let content_root = Path::new("D:/Wikis/agents");
+    let mcp_config = Path::new("D:/Temp/llm-wikis-xyz/mcp-config.json");
+    let schema_text = schema();
+    let args = build_argv(content_root, mcp_config, &schema_text, None);
+
+    let schema_pos = args.iter().position(|a| a == "--json-schema").unwrap();
+    assert_eq!(
+        args[schema_pos + 2],
+        OsString::from("--setting-sources"),
+        "--setting-sources must directly follow the --json-schema pair, before any optional --plugin-dir"
+    );
+    assert_eq!(args[schema_pos + 3], OsString::from("user"));
+    assert_eq!(args[schema_pos + 4], OsString::from("--settings"));
+    assert_eq!(
+        args[schema_pos + 5],
+        OsString::from(DISABLE_ALL_HOOKS_SETTINGS)
+    );
+
+    // Even with a local_plugin --plugin-dir, the hook-neutralization flags
+    // still precede it — a plugin-declared hook is neutralized too.
+    let plugin_dir = Path::new("D:/Wikis/agents/plugins/knowledge-tools");
+    let with_plugin = build_argv(content_root, mcp_config, &schema_text, Some(plugin_dir));
+    let settings_pos = with_plugin.iter().position(|a| a == "--settings").unwrap();
+    let plugin_pos = with_plugin
+        .iter()
+        .position(|a| a == "--plugin-dir")
+        .unwrap();
+    assert!(settings_pos < plugin_pos);
 }
 
 #[test]
