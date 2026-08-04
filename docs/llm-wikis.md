@@ -443,21 +443,28 @@ layers stack:
    unknown config keys).
 6. Claude runs with `Read,Grep,Glob` only — no Bash, Edit, Write, or web
    tool is exposed.
-7. Claude's wiki-side settings/hooks are neutralized: `--setting-sources
-   user` means the wiki's own (untrusted) `.claude/settings.json` and
-   `settings.local.json` are never loaded at all, and `--settings
-   {"disableAllHooks":true}` additionally disables every hook regardless of
-   source (defense in depth on top of that, since CLI-supplied settings
-   outrank user/project/local ones). This closes a real gap: Claude Code's
-   `-p` mode auto-loads and **runs hooks** (SessionStart, PreToolUse, ...)
-   declared by whatever directory it's launched in — the `--tools
-   Read,Grep,Glob` restriction in layer 6 governs only built-in tools, not
-   hook commands, so an unneutralized wiki-side hook is arbitrary shell
-   outside that gate. Confirmed empirically: without these two flags, a
-   test hook executed; with them, it did not, and the query still succeeded
-   normally. **Honest residual gap**: no CLI flag can disable an
-   admin-managed/enterprise-policy hook — that is out of this project's
-   scope, and the implementation machine has no managed settings.
+7. Claude's wiki-side hooks are neutralized with `--settings
+   {"disableAllHooks":true}` (CLI-supplied settings outrank user/project/
+   local settings, so this holds regardless of source). This closes a real
+   gap: Claude Code's `-p` mode auto-loads and **runs hooks** (SessionStart,
+   PreToolUse, ...) declared by whatever directory it's launched in — the
+   `--tools Read,Grep,Glob` restriction in layer 6 governs only built-in
+   tools, not hook commands, so an unneutralized wiki-side hook is arbitrary
+   shell outside that gate. Confirmed empirically: without this flag, a test
+   hook executed; with it, it did not, and the query still succeeded
+   normally. **The wiki's own `.claude/settings.json`/`settings.local.json`
+   are still loaded** — an earlier version of this fix also excluded them
+   (`--setting-sources user`), but that broke project-skill discovery
+   itself, which depends on that same setting source, so every
+   `project_skill`-mode wiki's entrypoint stopped resolving. The honest
+   trust boundary is therefore: settings load, but their reach is bounded by
+   this hook-disable, by `--strict-mcp-config`'s empty MCP configuration
+   (layer 9 below), and by the `--tools` restriction (layer 6) — not by
+   non-loading. **Honest residual gaps**: other keys in the wiki's settings
+   are loaded and not individually enumerated or denied, only bounded by
+   those three layers; and no CLI flag can disable an admin-managed/
+   enterprise-policy hook regardless — that is out of this project's scope,
+   and the implementation machine has no managed settings.
 8. Codex runs under `--sandbox read-only`; the sandbox is a write-prevention
    guarantee only, not a read-scope limiter (§3.6).
 9. No session persistence on either provider.

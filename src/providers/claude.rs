@@ -44,32 +44,53 @@ pub fn read_scope_broad_warning(project_root: &Path, content_root: &Path) -> Opt
 /// (user/project/local settings and any `--plugin-dir`), for this session
 /// (spec §10.2 R-27; PR #1 Codex review finding 1). CLI-supplied `--settings`
 /// outranks user/project/local settings, so this holds even for the
-/// operator's own trusted `~/.claude` settings or a configured local plugin.
+/// operator's own trusted `~/.claude` settings, the wiki's own (loaded)
+/// project/local settings, or a configured local plugin.
 pub const DISABLE_ALL_HOOKS_SETTINGS: &str = "{\"disableAllHooks\":true}";
 
 /// Builds the exact Claude argv vector (spec §10.2). Never includes the
 /// entrypoint or `query_prompt` — those exist only in the stdin prompt.
 ///
-/// **Threat this argv defends against (spec §10.2 R-27, PR #1 Codex review
-/// finding 1)**: `invoke`'s child cwd is the wiki's own `project_root`, an
-/// untrusted operator-controlled directory this wrapper does not own. Claude
-/// Code 2.1.220's `-p` mode auto-loads that directory's `.claude/settings.json`
-/// / `settings.local.json` and **runs any hooks they declare**
-/// (SessionStart, PreToolUse, ...) as arbitrary shell — entirely outside the
-/// `--tools Read,Grep,Glob` gate, which restricts only built-in tools, not
-/// hook commands. `.claude/`/`.agents/` immediately under `content_root` are
-/// also excluded from the mutation snapshot (spec §12), so a hook's writes
-/// there would be undetectable. `--setting-sources user` means only the
-/// operator's own `~/.claude` settings are read at all — the untrusted
-/// wiki-side project/local settings files are never loaded. `--settings`
-/// with [`DISABLE_ALL_HOOKS_SETTINGS`] is defense in depth on top of that.
-/// Confirmed live: the argv without these two flags let a wiki-side
-/// SessionStart hook execute; the argv with them did not, and the query
-/// still succeeded normally (`docs/verification/llm-wikis-execution.md`
-/// Task 15, "review loop iteration 1"). **Honest residual gap**: no CLI flag
-/// disables an admin-managed/enterprise-policy hook — out of scope, and this
-/// project verified no managed settings exist on its own implementation
-/// machine.
+/// **Threat this argv defends against, and the corrected mechanism (spec
+/// §10.2 R-27, PR #1 Codex review finding 1, review loop iteration 2)**:
+/// `invoke`'s child cwd is the wiki's own `project_root`, an untrusted
+/// operator-controlled directory this wrapper does not own. Claude Code's
+/// `-p` mode auto-loads that directory's `.claude/settings.json` /
+/// `settings.local.json` and **runs any hooks they declare** (SessionStart,
+/// PreToolUse, ...) as arbitrary shell — entirely outside the `--tools
+/// Read,Grep,Glob` gate, which restricts only built-in tools, not hook
+/// commands. `.claude/`/`.agents/` immediately under `content_root` are also
+/// excluded from the mutation snapshot (spec §12), so a hook's writes there
+/// would be undetectable.
+///
+/// An earlier version of this fix additionally passed `--setting-sources
+/// user`, intending to exclude the wiki's project/local settings entirely.
+/// That broke the tool's primary load mode: Claude's **project-skill
+/// discovery is itself gated on the `project` setting source** — excluding
+/// it made every `project_skill`-load-mode wiki's slash entrypoint resolve
+/// to `"Unknown command: /<name>"` instead of invoking the skill, confirmed
+/// by a live four-arm controlled experiment (`docs/verification/llm-wikis-execution.md`
+/// Task 15, "review loop iteration 2"). `--setting-sources` is **not**
+/// used here.
+///
+/// The corrected, honest trust boundary: the wiki's own project/local
+/// settings **are** loaded (required for skill discovery), but their reach
+/// is bounded by three independent layers rather than by non-loading —
+/// (a) [`DISABLE_ALL_HOOKS_SETTINGS`] disables every hook regardless of
+/// source; (b) `--strict-mcp-config` plus an empty MCP config locks out any
+/// MCP server the settings might declare; (c) `--tools Read,Grep,Glob`
+/// bounds the built-in tool surface regardless of any tool-related setting.
+/// Confirmed live (same checkpoint section): with `--setting-sources`
+/// removed and only `--settings {"disableAllHooks":true}` kept, a project
+/// skill resolved and answered correctly *and* a project-declared
+/// `SessionStart` hook on the same fixture did not fire; a control run with
+/// neither flag confirmed the hook is genuinely live in that fixture, so its
+/// absence under the fix is real suppression, not a fixture artifact.
+/// **Honest residual gaps**: other keys in the wiki's project/local settings
+/// are loaded and are not individually enumerated/denied — only bounded by
+/// layers (a)-(c) above; and no CLI flag disables an admin-managed/
+/// enterprise-policy hook regardless — out of scope, and this project
+/// verified no managed settings exist on its own implementation machine.
 pub fn build_argv(
     content_root: &Path,
     mcp_config_path: &Path,
@@ -94,8 +115,6 @@ pub fn build_argv(
         OsString::from("json"),
         OsString::from("--json-schema"),
         OsString::from(json_schema),
-        OsString::from("--setting-sources"),
-        OsString::from("user"),
         OsString::from("--settings"),
         OsString::from(DISABLE_ALL_HOOKS_SETTINGS),
     ];

@@ -1,8 +1,8 @@
 # LLM Wikis External Query Design
 
-Date: 2026-07-28 (amended 2026-07-30, corrected 2026-07-31, corrected 2026-08-04)  
-Version: 0.2.4  
-Status: user-approved design; revised after three independent review passes; amended 2026-07-30 against two real knowledge bases with measured evidence; corrected 2026-07-31 after an independent three-pass re-review (0 blockers — see §23, 0.2.1); Codex MCP-exclusion and per-provider constraint corrections from instrumented Phase 0 live evidence, user-approved (§23, 0.2.2 and 0.2.3); Claude wiki-side hook-neutralization correction from a Task 15 PR review finding, user-approved (§23, 0.2.4)  
+Date: 2026-07-28 (amended 2026-07-30, corrected 2026-07-31, corrected 2026-08-04 twice)  
+Version: 0.2.5  
+Status: user-approved design; revised after three independent review passes; amended 2026-07-30 against two real knowledge bases with measured evidence; corrected 2026-07-31 after an independent three-pass re-review (0 blockers — see §23, 0.2.1); Codex MCP-exclusion and per-provider constraint corrections from instrumented Phase 0 live evidence, user-approved (§23, 0.2.2 and 0.2.3); Claude wiki-side hook-neutralization correction from a Task 15 PR review finding, user-approved (§23, 0.2.4), itself corrected the same day after a live experiment showed it broke project-skill discovery, user-approved (§23, 0.2.5)  
 Project root: `<root>`
 
 > **Section numbering is stable.** §6.5 and §9 were removed in 0.2.0 but their headings are retained
@@ -571,7 +571,6 @@ claude
   --mcp-config <generated-empty-config>
   --output-format json
   --json-schema <inline-result-schema>
-  --setting-sources user
   --settings {"disableAllHooks":true}
 ```
 
@@ -597,7 +596,11 @@ Requirements:
 
 Claude's cwd is `project_root`, so read reach can exceed `content_root`. **When `content_root` is a strict subdirectory of `project_root`**, static doctor and every Claude query emit `CLAUDE_READ_SCOPE_BROAD`: `Claude read tools can inspect the configured project root, not only the selected content root; use an OS sandbox or container for stricter confidentiality.` When the two roots are equal the warning is not emitted, because read reach is exactly `content_root` and the message would be false.
 
-**`--setting-sources`/`--settings` threat and mitigation (R-27)**: because the child's cwd is `project_root`, an untrusted operator-controlled directory this wrapper does not own, Claude Code's `-p` mode auto-loads that directory's `.claude/settings.json`/`settings.local.json` and **executes any hooks they declare** (`SessionStart`, `PreToolUse`, ...) as arbitrary shell — entirely outside the `--tools Read,Grep,Glob` gate, which restricts only built-in tools, not hook commands. `.claude/`/`.agents/` immediately under `content_root` are excluded from the mutation snapshot (§12), so such a hook's writes there would be undetectable by that layer. `--setting-sources user` means only the operator's own trusted `~/.claude` settings are loaded for this session — the wiki-side project/local settings files are never read at all. `--settings {"disableAllHooks":true}` is defense in depth on top of that: CLI-supplied settings outrank user/project/local settings, so this also neutralizes any hook declared by the operator's own `~/.claude` settings or by a configured `--plugin-dir`. **Honest residual gap**: no CLI flag disables an admin-managed/enterprise-policy hook; that class of hook is out of this project's scope, and Phase 0's implementation machine was confirmed to have no managed settings configured.
+**`--settings` threat and mitigation, corrected mechanism (R-27, corrected by R-28)**: because the child's cwd is `project_root`, an untrusted operator-controlled directory this wrapper does not own, Claude Code's `-p` mode auto-loads that directory's `.claude/settings.json`/`settings.local.json` and **executes any hooks they declare** (`SessionStart`, `PreToolUse`, ...) as arbitrary shell — entirely outside the `--tools Read,Grep,Glob` gate, which restricts only built-in tools, not hook commands. `.claude/`/`.agents/` immediately under `content_root` are excluded from the mutation snapshot (§12), so such a hook's writes there would be undetectable by that layer.
+
+R-27 originally also added `--setting-sources user`, intending to exclude the wiki's project/local settings from being loaded at all. A live four-arm controlled experiment (R-28, §23) found this broke the tool's primary load mode: Claude's **project-skill discovery is itself gated on the `project` setting source** — excluding it made every `project_skill`-load-mode wiki's slash entrypoint resolve to `"Unknown command: /<name>"` instead of invoking the skill. `--setting-sources` is **not** used in the canonical argv above.
+
+The corrected, honest trust boundary: the wiki's own project/local settings **are** loaded (required for skill discovery), and their reach is bounded by three independent layers rather than by non-loading — (a) `--settings {"disableAllHooks":true}` disables every hook regardless of source (CLI-supplied settings outrank user/project/local settings, so this also covers a configured `--plugin-dir`'s own hooks); (b) `--strict-mcp-config` plus the empty MCP config locks out any MCP server the settings might declare; (c) `--tools Read,Grep,Glob` bounds the built-in tool surface regardless of any tool-related setting. **Honest residual gaps**: other keys in the wiki's project/local settings are loaded and are not individually enumerated or denied, only bounded by (a)-(c); and no CLI flag disables an admin-managed/enterprise-policy hook regardless — that class of hook is out of this project's scope, and Phase 0's implementation machine was confirmed to have no managed settings configured.
 
 A pre-implementation live spike must verify the exact current layout of each registered wiki, skill discovery, explicit `content_root`, schema output, zero wiki mutations, and every proposed flag name/value against the implementation machine's recorded Claude Code version. The argument vector in this section is proposed rather than timeless: an unsupported help surface blocks implementation until this specification and plan are corrected and re-reviewed. The successful result becomes a versioned capability fixture; no historical provider version is assumed.
 
@@ -717,7 +720,7 @@ Enforcement layers:
 - stdin question transport;
 - fixed provider arguments;
 - Claude read/search-only tools;
-- Claude wiki-side settings/hooks neutralized (`--setting-sources user`, `--settings {"disableAllHooks":true}`, §10.2 R-27 — the untrusted `project_root` cwd would otherwise auto-load and execute wiki-declared hooks, outside the tool-restriction layer; the honest residual gap is that no flag disables an admin-managed/enterprise-policy hook);
+- Claude wiki-side hooks neutralized (`--settings {"disableAllHooks":true}`, §10.2 R-27/R-28 — the untrusted `project_root` cwd would otherwise auto-load and execute wiki-declared hooks, outside the tool-restriction layer; project/local settings are still loaded, since skill discovery depends on them, so their reach is bounded by the hook/MCP/tool layers rather than by non-loading; the honest residual gap is that no flag disables an admin-managed/enterprise-policy hook);
 - Codex read-only sandbox;
 - no session persistence;
 - empty Claude MCP configuration;
@@ -1266,6 +1269,14 @@ This workspace is intentionally not a Git repository. Documentation is written a
 The two registered knowledge bases live in a **different**, already-existing Git repository at `D:\Wikis`. This project never writes to it.
 
 ## 23. Revision History
+
+### 0.2.5 — 2026-08-04
+
+Same-day correction of 0.2.4/R-27, after re-verifying LIVE-01/03/09 under the R-27 argv found the fix itself broke project-skill discovery. Diagnosed by the orchestrator via a live four-arm controlled experiment on a disposable scratch fixture (never a registered wiki), independently authorized. User-approved.
+
+| ID | Sections | Change | Evidence |
+|---|---|---|---|
+| R-28 | §10.2, §12 | Removes `--setting-sources user` from the Claude argv (R-27's other addition, `--settings {"disableAllHooks":true}`, is kept). §10.2 gains a corrected-mechanism paragraph and the trust-boundary is restated honestly: project/local settings are loaded (required for skill discovery), bounded by the hook/MCP/tool layers rather than by non-loading. §12's bullet is updated to match. | Re-verifying LIVE-01 under the R-27 argv failed: `INVALID_NATIVE_OUTPUT`, `"expected value at line 1 column 1"`, ~2.9s (far faster than any real model turn). A four-arm experiment isolated the cause: (A) old argv + plain prompt succeeds — ruling out the concurrent Claude Code 2.1.220→2.1.221 auto-update as the cause; (B) R-27 argv + plain prompt succeeds — ruling out the new flags alone; (C) R-27 argv + a project-skill slash entrypoint fails with `"result":"Unknown command: /probe"`, `duration_ms:13` — exactly the LIVE-01 failure signature; (D) old argv + the same entrypoint succeeds. Root cause: `--setting-sources user` excludes the `project` setting source, and Claude's project-skill discovery is gated on that source — this affects **both** registered wikis (`/wiki-query`, `/llm-wiki`), both `project_skill` load mode. Two further arms validated the fix on the same fixture (now with both a project skill and a project `SessionStart` hook): (E) `--settings {"disableAllHooks":true}` alone — skill resolved and answered correctly, and no hook marker file was created; (F) neither flag (control) — the hook marker file *was* created, confirming the hook is genuinely live in that fixture and (E)'s absence is real suppression. LIVE-01/03/09 re-verified passing under the corrected argv on Claude Code 2.1.221. Recorded in `docs/verification/llm-wikis-execution.md`, Task 15 "review loop iteration 2". |
 
 ### 0.2.4 — 2026-08-04
 
