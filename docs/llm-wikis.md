@@ -333,14 +333,10 @@ file, no installed skill. If a wiki's interactive skill would normally
 offer to save an answer or regenerate an index, the external-readonly
 prompt envelope tells it not to, and several independent, mostly-mechanical
 layers (§3.4) work against a mutation actually reaching disk — not one
-single guarantee, and not, as of this writing, a fully closed one: §3.4
-states each layer's honest residual (a narrowed-not-closed TOCTOU window
-around the Claude wiki-settings check, and settings this project does not
-yet enumerate). The before/after content snapshot (§3.5) catches a
-mutation that lands anywhere in the `content_root` tree it actually
-covers — **except** the two excluded `.claude/`/`.agents/` top-level
-directories (§3.5); a mutation confined entirely to one of those two
-excluded trees would not be caught by this layer.
+single guarantee, and not, as of this writing, a fully closed one. **§3.10
+is the complete, canonical statement of what is prevented, what is only
+detected, and what is not covered at all** — read it before treating this
+paragraph's summary as the full picture.
 
 ### 2.9 Live probes and `ENTRYPOINT_UNVERIFIED`
 
@@ -578,18 +574,30 @@ mechanism covers every other file that could exist under `.claude/`/`.agents/`**
 (other skills, slash commands, cached plugin data, anything not the one
 configured skill or the two named settings files) — those remain outside
 both the mutation snapshot and the fingerprint, a genuine gap, not one this
-project currently closes.
+project currently closes. §3.10 places this alongside every other
+prevented/detected/not-covered claim in one canonical list.
 
 ### 3.6 Read-scope warnings and the OS-sandbox recommendation
 
-Both providers can technically *read* further than `content_root`, even
-though neither can *write* anywhere:
+Both providers can technically *read* further than `content_root`. Write
+safety is a separate, narrower claim than "neither can write anywhere" —
+§3.10 states precisely what write-prevention does and does not cover;
+in short, the mechanical-prevention and detection layers there bound
+writes through the mechanisms this project controls, with named,
+currently-accepted gaps (an admin-managed hook, a check-to-spawn race),
+not an unconditional guarantee.
 
 - **`CLAUDE_READ_SCOPE_BROAD`** — emitted whenever `content_root` is a
   strict subdirectory of `project_root` (Claude's working directory is
   `project_root`, so its read tools can reach beyond the selected content
-  root). Not emitted when the two roots are equal, because in that case
-  read reach genuinely is exactly `content_root`.
+  root). Not emitted when the two roots are equal: as far as this
+  project's own configuration surface goes, read reach is exactly
+  `content_root` in that case. This warning's absence certifies that
+  narrower claim, not an absolute one — the operator's own *user-scope*
+  Claude settings (never inspected by this project; §3.10) could still
+  pre-authorize the `Read` tool for a path outside `content_root` even
+  when the roots are equal. That is the operator's own trusted
+  configuration, not a wiki- or caller-supplied vector.
 - **`CODEX_READ_SCOPE_BROAD`** — emitted on every Codex check/query,
   unconditionally, because Codex's read-only sandbox prevents writes but
   does not itself limit *reads* to the selected wiki.
@@ -662,3 +670,101 @@ paid call per wiki/agent pair you verify this way.
    distinguish a correct root from its parent, and it's worth checking
    because scanning and snapshotting a parent directory is needlessly
    expensive, not because anything is actually broken.
+
+### 3.10 The complete safety picture (canonical reference)
+
+Seven consecutive PR reviews found a safety, detection, or scope claim
+stated slightly more strongly than the code actually delivers — always a
+different sentence, scattered across this guide, the specification, and a
+few source doc comments. Restating each corrected sentence one at a time
+kept reproducing the same failure mode elsewhere. This section exists to
+stop that: it is the **one, canonical, complete statement** of what is
+prevented, what is only detected, and what is not covered at all. Every
+other safety sentence in this guide and in the specification either stands
+on its own without needing this section's nuance, or is shorthand for it —
+if a shorter claim elsewhere and this section ever seem to disagree, this
+section is correct and the shorter one is under-qualified.
+
+**(a) Mechanically prevented** — true regardless of what the model
+attempts, because the mechanism does not depend on the model's cooperation:
+
+| Prevented | Mechanism |
+|---|---|
+| Claude writing, editing, or executing anything via a tool call | `--tools Read,Grep,Glob` (layer 6, §3.4) — no Write, Edit, Bash, or web tool exists in the argv at all; there is no tool such a call could name |
+| Codex writing anything, through any tool it does have (including its shell/exec tools) | `--sandbox read-only` (layer 10, §3.4) — an OS-level write-prevention guarantee, independent of what Codex's own tools attempt |
+| A wiki's own `.claude/settings.json`/`settings.local.json` (or a symlinked `.claude` directory) smuggling in an executable or reach-widening key | `check_claude_wiki_settings_surface`'s allowlist (layer 7, §3.4) — only `enabledPlugins` is admitted; everything else fails the wiki closed as `ENTRYPOINT_INVALID`/`UNSAFE_FILESYSTEM_ENTRY` before the provider ever spawns |
+| A hook declared by user, project, local, or plugin-dir settings running during the session | `--settings {"disableAllHooks":true}` (layer 9, §3.4) — CLI-supplied settings outrank every other source |
+| An MCP server a wiki's settings might declare being reachable | Empty MCP configuration plus the two `--disable` flags (layer 12, §3.4) |
+| The operator's own user-level Codex configuration, including any user-level plugin or permission profile, being consulted at all | `--ignore-user-config` (§3.4, Codex adapter) |
+| Codex loading a wiki's project-level trust surface (`.codex/config.toml`, project hooks, execpolicy) | Codex's own trust-gating design (this wrapper's invocation never establishes trust) — verified by documentation, not a check this project authored (layer 17, §3.4) |
+| A configured path, the skill/plugin artifact tree, or (Claude) the `.claude` directory/settings files resolving through a symlink, junction, reparse point, or mount | Canonical containment plus special-entry rejection, `UNSAFE_FILESYSTEM_ENTRY` (layers 2 and 7, §3.4) |
+| The result shape being anything other than `wiki-query/v1` | The provider's own output schema, mechanically constrained (layer 14, §3.4) |
+| A shell metacharacter, quote, or the question itself being interpreted as a command | Stdin-only question transport; no shell command construction anywhere (layers 3-4, §3.4) |
+
+**(b) Instructed, and backstopped by detection if the instruction fails** —
+the harness cannot stop a model from *attempting* these; it can stop the
+attempt from *succeeding* (via the prevention layers in (a), which is why
+these two lists overlap) and can *detect* one that lands anyway:
+
+- The external-readonly prompt's instruction to never regenerate the
+  index, never write pages/logs/reports/caches, and never attempt mutation
+  through any tool (spec §7.2 items 6-8) is primarily backed by (a)'s
+  prevention layers — under normal operation there is no tool to attempt
+  them with. If a gap in (a) not listed there (see (c) below) ever let a
+  write land anyway, the before/after content snapshot (§3.5) detects it —
+  **with a stated coverage limit**: it covers every directory and regular
+  file beneath `content_root` **except** the `.claude`/`.agents`
+  directories when they are immediate children of `content_root` itself. A
+  mutation confined entirely to one of those two excluded trees is not
+  caught by this layer.
+
+**(c) Not covered** — real, currently-accepted gaps, stated directly
+rather than left to be inferred from what other sections don't mention:
+
+- **Admin-managed/enterprise-policy Claude hooks.** No CLI flag or static
+  check in this project can disable or detect one. Verified absent on this
+  project's own implementation machine; that is not a guarantee it is
+  absent on every machine this tool runs on.
+- **The check-to-spawn TOCTOU window.** The settings-surface check
+  (layer 7/8, §3.4) runs at the latest practical point — immediately
+  before the one call that spawns the provider — but a write to the
+  wiki's `.claude/` directory landing in the syscall gap between that
+  check returning and the operating system actually starting the process
+  still wins the race. Narrowed to that gap, not closed; closing it fully
+  would need OS-level isolation (a held filesystem snapshot, or a
+  mandatory-access-control policy) outside this project's scope.
+- **The operator's own user-scope Claude settings.**
+  `check_claude_wiki_settings_surface` inspects only the *wiki's own*
+  `project_root/.claude/settings.json`/`settings.local.json` — never the
+  operator's own `~/.claude/settings.json`, and it could not without
+  reading outside the wiki entirely. A `permissions.allow` rule the
+  operator has configured there for themselves could pre-authorize
+  Claude's `Read` tool for a path outside `content_root`/`project_root`,
+  even when `content_root` equals `project_root`. This is the operator's
+  own trusted configuration (Design Decision 12), not something a wiki or
+  a caller controls — an accuracy point about what the *absence* of
+  `CLAUDE_READ_SCOPE_BROAD` actually certifies (§3.6), not a
+  vulnerability.
+- **`enabledPlugins`, kept admitted as an evidence-backed risk
+  acceptance, not a proven-safe mechanism** (spec §23 R-32). Project-scope
+  plugin activation was empirically observed to have no effect in headless
+  mode on the tested Claude Code version — an observation on one version,
+  not a documented contract. This is surfaced to the operator via the
+  `CLAUDE_ENABLED_PLUGINS_DECLARED` warning; it is not prevented.
+- **Read reach beyond `content_root`** (§3.6) — a confidentiality gap,
+  not a write-safety one. Claude's read tools can reach the whole
+  `project_root` when `content_root` is a strict subdirectory of it
+  (`CLAUDE_READ_SCOPE_BROAD`); Codex's read-only sandbox never limits
+  reads to the selected wiki at all (`CODEX_READ_SCOPE_BROAD`,
+  unconditional, every check/query). The recommended mitigation for a
+  sensitive knowledge base is an OS-level sandbox or container exposing
+  only the selected wiki, not anything this tool itself provides.
+- **A model's own false claims in its answer text.** Nothing here fact-
+  checks whether the model's prose accurately describes what it did —
+  only citations are structurally validated (§11 of the specification). A
+  model claiming, in its answer, that it saved or updated something is not
+  caught by any mechanism above. Spec §7.2 item 5 ("omit answer-saving
+  offers") is the prompt's only defense against a model even *offering* to
+  save, and — unlike items 6-8 — it has **no mechanical backstop at all**:
+  offering to save is text in the answer, not a tool call, so there is
+  nothing to prevent or detect.

@@ -179,10 +179,23 @@ pub struct InvokeOutcome {
     /// `CLAUDE_ENABLED_PLUGINS_DECLARED` warning from the one check whose
     /// result is actually authoritative, rather than a separate early read
     /// that could observe a different (stale) filesystem state and
-    /// silently omit the warning the operator needs. `false` whenever no
-    /// child ran (`no_child_outcome`) or the check itself rejected the
-    /// wiki (an `Err` from that same call, handled as a query failure
-    /// before this field would ever matter).
+    /// silently omit the warning the operator needs.
+    ///
+    /// **What makes this `false`, precisely** (PR #1 Codex review iteration
+    /// 8 finding 1 corrected an earlier, wrong version of this sentence
+    /// that said "`false` whenever no child ran" -- that stopped being true
+    /// the moment the fix for that same finding shipped): `false` whenever
+    /// the authoritative check has not yet run, or ran and returned an
+    /// `Err` (the wiki is rejected outright as a query failure, before this
+    /// field would ever matter). Once that check has run and returned
+    /// `Ok`, its value is carried through **every** subsequent
+    /// `ClaudeAdapter::invoke` outcome, success or failure alike --
+    /// including a spawn failure, where "no child ran" is true but this
+    /// field is not `false` on that account alone. A future refactor must
+    /// not reintroduce the shortcut "no child ran implies `false`": three
+    /// of the four `no_child_outcome` call sites in `ClaudeAdapter::invoke`
+    /// run *before* the check and correctly default to `false` there; the
+    /// fourth (the spawn attempt itself) runs *after* it and must not.
     pub claude_enabled_plugins_declared: bool,
 }
 

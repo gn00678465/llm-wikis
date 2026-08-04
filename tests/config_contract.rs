@@ -912,8 +912,11 @@ fn selected_skill_artifact_tree_is_fully_scanned_with_no_exclusion() {
 // `--settings {"disableAllHooks":true}` (R-27/R-28) does not bound them.
 // Confirmed live: a settings.json declaring `apiKeyHelper` as a command
 // executed it even with that flag present. This is a preflight, allowlist
-// gate: `enabledPlugins` and `permissions.{allow,deny,defaultMode}` are the
-// only admitted keys; everything else fails closed as `ENTRYPOINT_INVALID`.
+// gate: `enabledPlugins` is the only admitted key (PR #1 Codex review
+// iteration 4 finding: `permissions.{allow,deny,defaultMode}` was admitted
+// here too under R-29, then removed entirely under R-30 -- a permission
+// rule's *value*, not just its key, can widen reach); everything else
+// fails closed as `ENTRYPOINT_INVALID`.
 // ---------------------------------------------------------------------------
 
 fn settings_project(tmp: &Path, file: &str, contents: &str) -> std::path::PathBuf {
