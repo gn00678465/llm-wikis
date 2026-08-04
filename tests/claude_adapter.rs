@@ -192,9 +192,11 @@ fn exact_argv() {
 /// commands. `.claude/`/`.agents/` immediately under `content_root` are also
 /// excluded from the mutation snapshot (spec §12), so a hook's writes there
 /// are undetectable. `--settings {"disableAllHooks":true}` disables every
-/// hook regardless of source (CLI-supplied settings outrank user/project/
-/// local settings) while leaving project/local settings otherwise loaded, so
-/// skill discovery still works. Empirically confirmed live (checkpoint,
+/// hook declared by user, project, or local settings (CLI-supplied
+/// `--settings` outranks all of those) — not an admin-managed/
+/// enterprise-policy hook, which no flag here reaches — while leaving
+/// project/local settings otherwise loaded, so skill discovery still works.
+/// Empirically confirmed live (checkpoint,
 /// iteration 2): with the corrected argv, a project skill resolved and
 /// answered correctly *and* a project-declared `SessionStart` hook on the
 /// same fixture did not fire; a control run with neither flag confirmed the

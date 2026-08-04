@@ -40,12 +40,18 @@ pub fn read_scope_broad_warning(project_root: &Path, content_root: &Path) -> Opt
     }
 }
 
-/// The `--settings` value that neutralizes every hook, from every source
-/// (user/project/local settings and any `--plugin-dir`), for this session
-/// (spec §10.2 R-27; PR #1 Codex review finding 1). CLI-supplied `--settings`
-/// outranks user/project/local settings, so this holds even for the
-/// operator's own trusted `~/.claude` settings, the wiki's own (loaded)
-/// project/local settings, or a configured local plugin.
+/// The `--settings` value that neutralizes every hook declared by user,
+/// project, local, or `--plugin-dir` settings, for this session (spec §10.2
+/// R-27; PR #1 Codex review finding 1). CLI-supplied `--settings` outranks
+/// user/project/local settings, so this holds even for the operator's own
+/// trusted `~/.claude` settings, the wiki's own (loaded) project/local
+/// settings, or a configured local plugin. **It does not reach an
+/// admin-managed/enterprise-policy hook** (PR #1 Codex review iteration 6
+/// finding A: an earlier version of this comment said "regardless of
+/// source" without this exception, self-contradicting the honest residual
+/// gap stated elsewhere) — no CLI flag or static check in this project
+/// disables that class of hook; see spec §10.2/§12's own "Honest residual
+/// gap" text.
 pub const DISABLE_ALL_HOOKS_SETTINGS: &str = "{\"disableAllHooks\":true}";
 
 /// Builds the exact Claude argv vector (spec §10.2). Never includes the
@@ -58,11 +64,13 @@ pub const DISABLE_ALL_HOOKS_SETTINGS: &str = "{\"disableAllHooks\":true}";
 /// `settings.local.json` and **runs any hooks they declare** (SessionStart,
 /// PreToolUse, ...) as arbitrary shell — entirely outside the `--tools
 /// Read,Grep,Glob` gate, which restricts only built-in tools, not hook
-/// commands. [`DISABLE_ALL_HOOKS_SETTINGS`] disables every hook regardless
-/// of source. `--setting-sources user` was tried instead/in addition (R-27)
-/// and reverted (R-28) — it also excludes the `project` setting source that
-/// Claude's project-skill discovery itself depends on, breaking every
-/// `project_skill`-load-mode wiki's entrypoint; it is **not** used here.
+/// commands. [`DISABLE_ALL_HOOKS_SETTINGS`] disables every hook declared by
+/// those settings sources — see its own doc comment for the admin-managed/
+/// enterprise-policy exception this does **not** reach. `--setting-sources
+/// user` was tried instead/in addition (R-27) and reverted (R-28) — it also
+/// excludes the `project` setting source that Claude's project-skill
+/// discovery itself depends on, breaking every `project_skill`-load-mode
+/// wiki's entrypoint; it is **not** used here.
 ///
 /// **This argv alone is not the trust boundary — do not read it as one.**
 /// `--settings`/`--strict-mcp-config`/`--tools` bound hooks, MCP, and the
@@ -336,9 +344,24 @@ impl ProviderAdapter for ClaudeAdapter {
         // gap between this check returning and `runner.run` actually
         // executing `Command::spawn` -- **not a closure of that window**;
         // see the doc comment on `check_claude_wiki_settings_surface`.
-        if let Err(e) = crate::config::check_claude_wiki_settings_surface(&request.project_root) {
-            return no_child_outcome(e);
-        }
+        //
+        // R-33 (PR #1 Codex review iteration 6 finding B): this call's
+        // `Ok(bool)` used to be discarded (`if let Err(e) = ...`), which was
+        // fine for enforcement (the `Err` path was already handled) but
+        // silently dropped the one authoritative signal for whether
+        // `CLAUDE_ENABLED_PLUGINS_DECLARED` should fire -- `QueryService`
+        // separately re-read the same check *earlier*, before the version/
+        // auth probes, so a wiki whose settings started declaring
+        // `enabledPlugins` only between that earlier read and this
+        // authoritative one would spawn with the warning silently missing.
+        // Capturing the boolean here and carrying it through `InvokeOutcome`
+        // makes this call the single source for both enforcement and the
+        // warning -- there is no longer any earlier read to go stale.
+        let claude_enabled_plugins_declared =
+            match crate::config::check_claude_wiki_settings_surface(&request.project_root) {
+                Ok(declares) => declares,
+                Err(e) => return no_child_outcome(e),
+            };
         let outcome = match runner.run(ProcessRequest {
             executable: request.executable.clone(),
             args,
@@ -363,6 +386,7 @@ impl ProviderAdapter for ClaudeAdapter {
                 child_exit_code,
                 raw_format: None,
                 diagnostics: Vec::new(),
+                claude_enabled_plugins_declared,
             };
         }
         if let Err(e) = map_nonzero_exit(&outcome) {
@@ -371,6 +395,7 @@ impl ProviderAdapter for ClaudeAdapter {
                 child_exit_code,
                 raw_format: None,
                 diagnostics: Vec::new(),
+                claude_enabled_plugins_declared,
             };
         }
         match parse_claude_output(&outcome.stdout) {
@@ -379,12 +404,14 @@ impl ProviderAdapter for ClaudeAdapter {
                 child_exit_code,
                 raw_format: Some(raw_format),
                 diagnostics: Vec::new(),
+                claude_enabled_plugins_declared,
             },
             Err(e) => InvokeOutcome {
                 model_result: Err(e),
                 child_exit_code,
                 raw_format: None,
                 diagnostics: Vec::new(),
+                claude_enabled_plugins_declared,
             },
         }
     }

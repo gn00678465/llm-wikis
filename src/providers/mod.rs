@@ -171,6 +171,19 @@ pub struct InvokeOutcome {
     /// Not surfaced by the public envelope today; carried through for
     /// doctor/live-check reuse (Task 11).
     pub diagnostics: Vec<String>,
+    /// Claude only (always `false` for Codex): whether the *authoritative*
+    /// pre-spawn `check_claude_wiki_settings_surface` call inside
+    /// `ClaudeAdapter::invoke` found the wiki's settings declaring
+    /// `enabledPlugins` (spec §13 R-32/R-33, PR #1 Codex review iteration 6
+    /// finding B). Exists so `QueryService` can drive the
+    /// `CLAUDE_ENABLED_PLUGINS_DECLARED` warning from the one check whose
+    /// result is actually authoritative, rather than a separate early read
+    /// that could observe a different (stale) filesystem state and
+    /// silently omit the warning the operator needs. `false` whenever no
+    /// child ran (`no_child_outcome`) or the check itself rejected the
+    /// wiki (an `Err` from that same call, handled as a query failure
+    /// before this field would ever matter).
+    pub claude_enabled_plugins_declared: bool,
 }
 
 /// The outcome for a failure before any child process ever ran (temp-
@@ -181,6 +194,7 @@ pub fn no_child_outcome(err: AppError) -> InvokeOutcome {
         child_exit_code: None,
         raw_format: None,
         diagnostics: Vec::new(),
+        claude_enabled_plugins_declared: false,
     }
 }
 

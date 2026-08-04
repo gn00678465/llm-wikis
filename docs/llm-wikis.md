@@ -498,18 +498,19 @@ layers stack:
    that race. Eliminating the window entirely would need OS-level isolation
    this wrapper does not provide.
 9. On top of layers 7-8, `--settings {"disableAllHooks":true}` neutralizes
-   every hook from every source for the session (CLI-supplied settings
-   outrank user/project/local settings), `--strict-mcp-config`'s empty MCP
-   configuration (layer 12 below) locks out any MCP server the settings
-   might declare, and the `--tools Read,Grep,Glob` restriction (layer 6)
-   bounds the built-in tool surface regardless of any tool-related setting.
-   These exist because the wiki's own settings are still loaded (required
-   for skill discovery — excluding them via `--setting-sources user` was
-   tried and found to break every `project_skill`-mode wiki's entrypoint).
-   **Honest residual gap**: no CLI flag can disable an admin-managed/
-   enterprise-policy hook regardless of any of the above — that is out of
-   this project's scope, and the implementation machine has no managed
-   settings.
+   every hook declared by user, project, local, or plugin-dir settings for
+   the session (CLI-supplied settings outrank all of those) — **not** an
+   admin-managed/enterprise-policy hook, spelled out in the residual gap
+   below — `--strict-mcp-config`'s empty MCP configuration (layer 12 below)
+   locks out any MCP server the settings might declare, and the `--tools
+   Read,Grep,Glob` restriction (layer 6) bounds the built-in tool surface
+   regardless of any tool-related setting. These exist because the wiki's
+   own settings are still loaded (required for skill discovery — excluding
+   them via `--setting-sources user` was tried and found to break every
+   `project_skill`-mode wiki's entrypoint). **Honest residual gap**: no CLI
+   flag can disable an admin-managed/enterprise-policy hook regardless of
+   any of the above — that is out of this project's scope, and the
+   implementation machine has no managed settings.
 10. Codex runs under `--sandbox read-only`; the sandbox is a write-prevention
     guarantee only, not a read-scope limiter (§3.6).
 11. No session persistence on either provider.

@@ -361,6 +361,7 @@ impl ProviderAdapter for CodexAdapter {
                 child_exit_code,
                 raw_format: None,
                 diagnostics: Vec::new(),
+                claude_enabled_plugins_declared: false,
             };
         }
         if let Err(e) = map_nonzero_exit(&outcome) {
@@ -369,6 +370,7 @@ impl ProviderAdapter for CodexAdapter {
                 child_exit_code,
                 raw_format: None,
                 diagnostics: Vec::new(),
+                claude_enabled_plugins_declared: false,
             };
         }
         match parse_codex_output(&outcome.stdout) {
@@ -381,12 +383,14 @@ impl ProviderAdapter for CodexAdapter {
                     .iter()
                     .map(|signal| format!("{signal:?}"))
                     .collect(),
+                claude_enabled_plugins_declared: false,
             },
             Err(e) => InvokeOutcome {
                 model_result: Err(e),
                 child_exit_code,
                 raw_format: None,
                 diagnostics: Vec::new(),
+                claude_enabled_plugins_declared: false,
             },
         }
     }
