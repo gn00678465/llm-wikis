@@ -5,7 +5,7 @@
 ```text
 D1 two real knowledge bases: D:\Wikis\agents and D:\Wikis\harness-engineering. Never written to.
 D2 no Git repository: approved 2026-07-29. Checkpoints replace commits. Task 14 blocked.
-Specification version in force: 0.2.6 (amended 2026-07-30, corrected 2026-07-31 after independent re-review, corrected 2026-08-04 for R-27 Claude wiki-side hook neutralization then corrected twice more the same day: R-28 after a live experiment showed R-27 broke project-skill discovery, R-29 after a live experiment showed the hook-only mitigation left other executable settings keys open — see its Revision History).
+Specification version in force: 0.2.7 (amended 2026-07-30, corrected 2026-07-31 after independent re-review, corrected 2026-08-04 for R-27 Claude wiki-side hook neutralization then corrected three more times the same day: R-28 after a live experiment showed R-27 broke project-skill discovery, R-29 after a live experiment showed the hook-only mitigation left other executable settings keys open, R-30 after a fourth review round narrowed the R-29 allowlist, closed a symlink gap, and moved the query-time check immediately before provider spawn — see its Revision History).
 ```
 
 ## Task 0 environment
@@ -730,3 +730,94 @@ Also confirmed via static (non-billable) `doctor --json doctor --agent claude` b
 ### Scope discipline
 
 `src/config.rs` (new `check_claude_wiki_settings_surface` + two constants), `src/doctor.rs` (one call site), `src/query.rs` (one call site, closing TOCTOU), `src/providers/claude.rs` (corrected trust-boundary doc comment; Finding-2 fix reused the same file), `tests/config_contract.rs`/`tests/doctor.rs`/`tests/query_service.rs`/`tests/claude_adapter.rs` (new/corrected tests), `docs/2026-07-28-llm-wikis-external-query-design.md` (0.2.5→0.2.6, R-29), `docs/llm-wikis.md` (§3.4/§3.8 corrected), and this checkpoint were touched. `docs/verification/llm-wikis-v0.1.0-checklist.md` was **not** touched (Finding 3, recorded as a note above instead). `src/providers/codex.rs` was **not** touched (investigated, reasoning above). Nothing under D:\Wikis was written at any point (six independent digest checks above, all identical, plus the static-doctor sanity check). No test was weakened: every new/changed assertion is strictly additive or strictly stronger (Finding 1's tests are new; Finding 2's fix replaces a self-referential comparison with a literal one, which can only fail more often, never less).
+
+## Review loop iteration 4 (Codex second BLOCKING review, narrowed allowlist, symlink close, TOCTOU honesty, 2026-08-04)
+
+- completed_utc: 2026-08-04T00:00:00Z
+- commits: 3c97d20 (fix: narrow wiki-settings allowlist to enabledPlugins, close symlink gap); commit 2 recorded once made (this checkpoint)
+- worker: task15-docs-live-worker-2026-08-02 (fixes, TDD, spec/doc audit, re-verification live rows); Codex (PR #1 diff review, iteration 4, two BLOCKING + two minor findings); orchestrator (independent verification/analysis of all findings, ruled out spending quota on finding 1 since fix (a) makes the vulnerability moot by construction, specified fix (b)/(c) exactly)
+- files: src/config.rs 5d135deade470a0f3aa641b421bdd6ab39aa6f73c29389a4321183dd82b8a952
+- files: src/query.rs 3e43b768b3949f64a998dc95c109f4f0bc71f3f32f445d501a9aa3e559dc68f1
+- files: tests/config_contract.rs 7d5d7a017308bf31b6b6a1f87fe0e7e0ba0aa4d0cda776e18e517ceda35b3558
+- files: tests/query_service.rs 71bd44c3b685cfaefb1697d45dd01d5165a5657283f53f98522f2dfd3d961ee8
+- files: docs/llm-wikis.md a87ce72d70ae1fabee14c309375557a211737a95cd712dddb6aa7ed992dfdedf
+- files: docs/2026-07-28-llm-wikis-external-query-design.md 379afa41516d065ad43c112e32671bb974bff1ab837436e572a499ed2a8a28bb
+- files: docs/verification/llm-wikis-execution.md self (this section)
+- result: PASS
+
+### Finding 1 (BLOCKING, accepted, fixed without spending quota per instruction) — the R-29 allowlist admitted `permissions` but never validated its values
+
+`--tools Read,Grep,Glob` bounds tool *names*; a permission rule such as `{"permissions":{"allow":["Read(C:/Users/alice/.ssh/**)"]}}` pre-authorizes the exposed `Read` tool against a specific path, which is not a tool-name concern the R-29 allowlist ever checked. **Fix (a)**: `ALLOWED_WIKI_SETTINGS_KEYS` shrunk to `enabledPlugins` alone — `permissions` is denied entirely, key and values, not partially validated (enumerating a safe subset of permission-rule *values* would be an open-ended parsing problem, not a closed one). The one remaining admitted key is additionally hardened: `enabledPlugins`'s value must now be an object whose every entry is a plain boolean, or the wiki is denied — closing the possibility of it becoming a smuggling vector for an unexpected shape. `enabledPlugins` remains admissible because it only toggles a plugin the *operator* already trusted at the user level (`~/.claude`) — a wiki's project settings cannot use it to introduce a new plugin source of their own, and any hooks an enabled plugin itself declares are independently killed by `--settings {"disableAllHooks":true}`. Cost check (the orchestrator's, cited rather than repeated): `D:\Wikis\agents` has no settings file at all, and `D:\Wikis\harness-engineering`'s `settings.local.json` contains only `enabledPlugins` — nothing real regresses.
+
+### Finding 2 (BLOCKING, accepted) — non-atomic check, two sub-issues
+
+**Fix (b), closable, closed**: a dangling `.claude/settings.json` symlink previously reported `NotFound` under a plain existence check and passed silently, letting its target be created *after* the check and *before* the provider read it — `.claude/` is excluded from the recursive special-entry scan (spec §6.1), so nothing else would ever catch this. `check_claude_wiki_settings_surface` now calls `fs::symlink_metadata` (not `fs::read_to_string` directly) on both settings paths and rejects any non-regular-file entry — symlink, junction, reparse point, directory, or other special entry — as `UNSAFE_FILESYSTEM_ENTRY`, reusing this codebase's own existing `is_special_entry`/`ErrorCode::UnsafeFilesystemEntry` special-entry-detection pattern (already used by `scan_tree`/`joined_checked` elsewhere in `src/config.rs`) rather than inventing a new one.
+
+**Fix (c), narrowed, honestly not claimed closed**: the `query`-time check moved from Step 6 (right after `resolve_and_check_artifact`, with five more steps — executable/version/auth probes, the fingerprint gate, prompt build, before-snapshot — still to come before the provider ever spawns) to immediately before `self.step("invoke")`, after all of that work. `src/providers/claude.rs`'s doc comment, `docs/2026-07-28-llm-wikis-external-query-design.md` §10.2/§12, and `docs/llm-wikis.md` §3.4 all now state this plainly: the check-to-spawn window is **narrowed, not closed** — a write landing in the remaining gap (plugin-dir resolution and `ProviderRequest` construction, both fast, non-adversarial operations) still wins the race. Full closure would require OS-level isolation (a held filesystem snapshot, or a mandatory-access-control policy) outside this wrapper's scope; no such mechanism was proposed or implemented, per the instruction not to implement one unilaterally.
+
+### Finding 3 (minor, accepted) — error-code taxonomy
+
+Judgment: **broadened `ENTRYPOINT_INVALID`'s spec §14 definition** rather than introducing a new code. Reasoning, stated in the spec's own R-30 revision entry: the exit class (2, argument/config-class, always preceding any provider call) and the doctor check name (`entrypoint`) this new check uses are already identical to the pre-existing local-plugin-lifecycle-rejection use of the same code for essentially the same class of concern ("is this invocation surface trustworthy") — a new code would fragment an already-coherent bucket without changing any exit/handling behavior downstream. `ErrorCode::ALL` stays at 27 entries; no test in `tests/error_contract.rs` needed touching (`exactly_twenty_seven_codes_exist` still holds).
+
+### Finding 4 (minor) — PROC-22 checklist staleness, deferred, Task 16 note kept prominent
+
+`docs/verification/v0.1.0-checklist.md` `PROC-22` was **not** edited (unchanged from iteration 3's ruling — it is the independent verifier's artifact). Restating prominently here, now covering the full R-27 through R-30 history for Task 16's benefit: **`PROC-22`'s expected argv is stale in two compounding ways** — (1) it predates R-27/R-28 entirely, so it has neither `--settings {"disableAllHooks":true}` nor any awareness that `--setting-sources user` was tried and reverted; (2) it has no awareness that a Claude wiki's `.claude/settings.json`/`settings.local.json` are now separately gated by the R-29/R-30 `check_claude_wiki_settings_surface` allowlist (`enabledPlugins` only, symlink-rejecting) — a check outside `build_argv` itself but load-bearing for the same trust boundary PROC-22 is meant to verify. Task 16's verifier should re-derive PROC-22's expected value against the current `src/providers/claude.rs::build_argv` **and** treat the settings-surface check as part of what "the exact Claude argv vector matches §10.2" should be understood to mean, even though it is not literally part of the argv vector.
+
+### Finding 5 (doc overclaim, accepted) — fingerprint-coverage overclaim, and a full re-audit
+
+Confirmed: `docs/llm-wikis.md` (and, found during the same audit, the **pre-existing spec text** at `docs/2026-07-28-llm-wikis-external-query-design.md` §12, predating this task) both claimed the excluded `.claude`/`.agents` directories are "covered by the skill-fingerprint mechanism" — false as a blanket claim. `skill_fingerprint_dir` (`src/query.rs`) resolves only the *configured skill's own directory* (`project_skill`: the skill file's parent directory; `local_plugin`: the whole `plugin_dir`, typically outside `content_root` entirely) — not the whole `.claude`/`.agents` tree. Both documents corrected to state precisely what is and is not covered: the one configured skill/plugin directory (fingerprint) plus, now, the two named Claude settings files (R-29/R-30's allowlist check) — everything else under `.claude`/`.agents` (other skills, slash commands, cached plugin data) remains genuinely unmonitored by both the snapshot and the fingerprint, stated as such rather than glossed over.
+
+**Full re-audit performed, per the instruction to remove every remaining overclaim, not just the one named**: reviewed all 17 layers of `docs/llm-wikis.md` §3.4 plus §2.8 and §3.5 against the current code. Findings beyond the named one: §2.8's "the harness enforces read-only mechanically regardless of what the skill's own text says" overclaimed completeness given the now-documented TOCTOU residual (fix (c)) and the "settings this project does not yet enumerate" residual (fix (a)'s own honest gap) — softened to point at §3.4's own per-layer residuals rather than asserting a blanket guarantee. No other overclaim was found in this pass; the remaining layers' claims were checked individually against the corresponding code (`--tools` restriction against `TOOLS` constant, MCP exclusion against the empty-config/disable-flag argv, snapshot coverage against `src/snapshot.rs`, Codex trust-gating against the iteration-3 research) and left as stated.
+
+### Gates
+
+`cargo fmt --check` -> exit 0 (no diff). `cargo clippy --all-targets --all-features -- -D warnings` -> exit 0, clean. `cargo test --all-targets --all-features --no-fail-fast -- --test-threads=1` -> exit 0, **349 passed, 0 failed** (344 from before this iteration + 5 new: a settings.json-as-directory case, a symlinked-settings-path case, `enabledPlugins` non-object, `enabledPlugins` non-boolean value, and the path-qualified `permissions.allow` case).
+
+### TDD, with two genuine red runs
+
+**Fix (a)/(b) together**: `src/config.rs` was temporarily reverted to the pre-iteration-4 shape (`permissions` re-admitted with `allow`/`deny`/`defaultMode`, symlink check removed, restored from a backed-up copy afterward and confirmed byte-identical via `diff`, not merely reasoned about). `cargo test --test config_contract -- permissions_key_is_rejected permissions_allow_with_a_path_qualified a_symlinked_settings_json --test-threads=1` -> exit 101, all 3 tests failed exactly as expected (`called Result::unwrap_err() on an Ok value`, i.e. the vulnerable code let each fixture pass). Restored, re-ran -> exit 0, all 3 green. **Fix (c)**: relocating the query-time check required updating (not just adding) `query_rejects_a_forbidden_claude_wiki_settings_key_before_any_spawn` — its `FakeProcessRunner` now needs the version/auth probe responses queued (`queue_success_probes`) and a seeded matching probe record (`seed_matching_probe`), since the check now runs *after* those steps; without the queued responses the test would panic at the earlier probe step rather than exercising the settings check at all, which the run below confirms actually happened before the fix was applied to the test.
+
+### Escape-fixture verification, both named cases, zero model quota
+
+Two disposable scratch fixtures (outside the repo, outside D:\Wikis), reproducing the orchestrator's exact examples, checked via the real binary's static `doctor` (no `--live`):
+
+```text
+permissions.allow path-qualified rule:
+{"name":"entrypoint","status":"fail","code":"ENTRYPOINT_INVALID",
+ "message":"wiki .claude/settings.json declares a rejected settings key: permissions"}
+
+dangling symlink at .claude/settings.json:
+{"name":"entrypoint","status":"fail","code":"UNSAFE_FILESYSTEM_ENTRY",
+ "message":"wiki .claude/settings.json is a symlink, junction, reparse point, or mount point"}
+```
+
+Both exit `2`, `ok:false`. **Both of the orchestrator's iteration-4 escape mechanisms are now rejected**, confirmed directly through the real binary.
+
+### Re-verification of LIVE-01, LIVE-03, LIVE-09 under the narrowed check — all PASS
+
+The settings check changed (narrower allowlist, symlink rejection, later placement), so all three previously-passing Claude rows were re-run through the rebuilt binary, on Claude Code 2.1.221 (unchanged). LIVE-02/LIVE-04 not re-run (Codex untouched by this iteration too).
+
+**Independent before/after integrity check:**
+
+| Wiki | Checked at | count / digest | Identical to baseline |
+|---|---|---|---|
+| `D:\Wikis\agents` | before this batch | 124 / `fc2a39fc50b870ad23ec822b3ad6e5889b3dfb89beb2ddde0ab379b07b933b0a` | (baseline, unchanged all task) |
+| `D:\Wikis\agents` | after LIVE-01 (PASS) | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\agents` | final check, after LIVE-09 | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\harness-engineering` | before this batch | 697 / `076ae8ddd8bdb4e3f39650988487f067d75aa22b18164eb1bdf1b56d1cdb12e9` | (baseline, unchanged all task) |
+| `D:\Wikis\harness-engineering` | after LIVE-03 (PASS) | 697 / `076ae8dd...cdb12e9` | yes |
+| `D:\Wikis\harness-engineering` | final check, after LIVE-09 | 697 / `076ae8dd...cdb12e9` | yes |
+
+Static (non-billable) `doctor --json doctor --agent claude` before any live call: `ok:true` for all three registered Claude wikis, including `harness-engineering`'s real `enabledPlugins`-only `settings.local.json` — the critical case — passing the narrowed allowlist cleanly.
+
+**Per-row results:**
+
+| Row | Result | Provider version | Duration (doctor --live + query) | raw_format | knowledge_status | Citations found/resolved | Warnings |
+|---|---|---|---|---|---|---|---|
+| LIVE-01 (Claude/`agents`) | **PASS** | Claude Code 2.1.221 | 20009ms + 18642ms | `claude-json` | grounded | 4/4 | none |
+| LIVE-03 (Claude/`harness-engineering`) | **PASS** | Claude Code 2.1.221 | 25637ms + 25703ms | `claude-json` | grounded | 2/2 | `CLAUDE_READ_SCOPE_BROAD` present, correct — strict containment; **the critical `enabledPlugins`-only case, confirmed still working end to end after the narrowed check** |
+| LIVE-09 (Claude local-plugin fixture) | **PASS** | Claude Code 2.1.221 | 22076ms + 18459ms | `claude-json` | grounded | 1/1 | none |
+
+### Scope discipline
+
+`src/config.rs` (allowlist shrunk to `enabledPlugins`, value validation, `symlink_metadata`-based special-entry rejection), `src/query.rs` (check relocated to immediately before `invoke`), `tests/config_contract.rs` (one test replaced, five new), `tests/query_service.rs` (one test updated to queue the probes now consumed before the check runs), `docs/llm-wikis.md` (§2.8/§3.4/§3.5/§3.8 corrected, layers renumbered), `docs/2026-07-28-llm-wikis-external-query-design.md` (0.2.6→0.2.7, R-30, §10.2/§12/§14/§15 corrected), and this checkpoint were touched. `src/doctor.rs` was **not** touched this iteration (its static `entrypoint_check` call site, added in iteration 3, needed no change — only the `query`-time call site moved). `src/providers/codex.rs` was **not** touched (unaffected by any of this iteration's findings). `docs/verification/llm-wikis-v0.1.0-checklist.md` was **not** touched (Finding 4). Nothing under D:\Wikis was written at any point (six independent digest checks above, all identical, plus two static-doctor sanity checks and the two escape-fixture checks, all zero-quota). No test was weakened: every changed assertion is strictly additive or strictly stronger than before (the replaced `permissions_allow_deny_default_mode_pass` now asserts rejection where it previously asserted acceptance — a correctness fix following the code's own corrected behavior, not a weakening in either direction).
