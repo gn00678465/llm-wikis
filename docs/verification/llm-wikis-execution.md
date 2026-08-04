@@ -5,7 +5,7 @@
 ```text
 D1 two real knowledge bases: D:\Wikis\agents and D:\Wikis\harness-engineering. Never written to.
 D2 no Git repository: approved 2026-07-29. Checkpoints replace commits. Task 14 blocked.
-Specification version in force: 0.2.5 (amended 2026-07-30, corrected 2026-07-31 after independent re-review, corrected 2026-08-04 for R-27 Claude wiki-side hook neutralization then corrected again the same day as R-28 after a live experiment showed R-27 broke project-skill discovery — see its Revision History).
+Specification version in force: 0.2.6 (amended 2026-07-30, corrected 2026-07-31 after independent re-review, corrected 2026-08-04 for R-27 Claude wiki-side hook neutralization then corrected twice more the same day: R-28 after a live experiment showed R-27 broke project-skill discovery, R-29 after a live experiment showed the hook-only mitigation left other executable settings keys open — see its Revision History).
 ```
 
 ## Task 0 environment
@@ -633,3 +633,100 @@ LIVE-01's `PROVIDER_WARNING` is new relative to its iteration-1 run (which had n
 ### Scope discipline
 
 Only `src/providers/claude.rs` (the `--setting-sources` removal, corrected doc comment), `tests/claude_adapter.rs` (one test replaced), `docs/2026-07-28-llm-wikis-external-query-design.md` (0.2.4→0.2.5, R-28, corrected §10.2/§12 text), `docs/llm-wikis.md` (§3.4 corrected), and this checkpoint were touched. No Codex-side file was touched (correctly — the Codex argv was never part of this regression). Nothing under D:\Wikis was written at any point in this iteration (five independent digest checks above, all identical). No test was weakened: the replaced test asserts strictly more than a bare "flags present" check (it also asserts `--setting-sources`'s absence, a regression guard the iteration-1 test did not have).
+
+## Review loop iteration 3 (Codex BLOCKING review, orchestrator-confirmed escape, architectural fix, 2026-08-04)
+
+- completed_utc: 2026-08-04T00:00:00Z
+- commits: 2100cfd (fix: deny wiki-side Claude settings surface beyond a small allowlist); commit 2 recorded once made (this checkpoint)
+- worker: task15-docs-live-worker-2026-08-02 (TDD fix, .agents/.codex investigation, re-verification live rows); Codex (PR #1 diff review, 3 findings, one BLOCKING); orchestrator (independent empirical confirmation of finding 1 on a disposable scratch fixture, rulings on all three findings, architectural-fix instruction)
+- files: src/config.rs dbc4b1d82b08da89a139448700652364fc66b85b6284993cb311198b26231193
+- files: src/doctor.rs a68def1a7ebd6e7a52e9a2ecdd2103adedc99960293f76f73eab26093462141d
+- files: src/query.rs 6e50a22e9ebcea2e66d63c38b9011298f1fc8ea7474aa602dd4146276d59c062
+- files: src/providers/claude.rs 84fada0da59591405fbdde8e5badda8ffb0e41aa8604c001f427f1477a555f9f
+- files: tests/config_contract.rs 184bba1e11d2f689891972e661002985d9a44c71625a5b5445671f170357e959
+- files: tests/doctor.rs ae6294b81316a8f262dc9458ab7c99c82bb06a496a78b09013e6eb3c11231533
+- files: tests/query_service.rs b97b350a59664938b6f8f5d62e347ee8bc99323b87b14562866446edfa93e877
+- files: tests/claude_adapter.rs 3206b752a0862c3cf22be3118d49ea42764bb254f55703d5bcd4d52f86ae30c2
+- files: docs/llm-wikis.md 6bd46458fd9baeb0c8fea6e0cbf27a2357e31720848179dc350ed68deec1bba1
+- files: docs/2026-07-28-llm-wikis-external-query-design.md ccf8ad24818d083bc3aa0bec4d109c7f179e128948737a7b19435c29910f5d27
+- files: docs/verification/llm-wikis-execution.md self (this section)
+- result: PASS
+
+### Finding 1 (BLOCKING, confirmed) — `disableAllHooks` does not bound the whole wiki-settings surface
+
+The orchestrator's own scratch-fixture reproduction (claude 2.1.221, the iteration-2-corrected argv, including `--settings {"disableAllHooks":true}`) found that a wiki-side `.claude/settings.json` declaring `apiKeyHelper` as a command **executed it** — a marker file was created — proving the iteration-2 trust-boundary text ("their reach is bounded by disableAllHooks + strict-mcp-config + tools") was **false as shipped**. `disableAllHooks` bounds only the `hooks` key; several other documented settings keys execute a command or widen reach on their own: `apiKeyHelper` (proven), `awsCredentialExport`, `awsAuthRefresh`, `gcpAuthRefresh`, `otelHeadersHelper`, `statusLine` (all run a configured command); `permissions.additionalDirectories` (widens Read/Grep/Glob beyond `project_root`, falsifying `CLAUDE_READ_SCOPE_BROAD`'s "roots equal ⇒ read reach is exactly `content_root`" basis); `env` (e.g. an `ANTHROPIC_BASE_URL` redirect). Writes from such a command under `.claude/`/`.agents/` are invisible to the mutation snapshot (`src/snapshot.rs`), so this cannot be caught after the fact.
+
+**Architectural fix, mirroring the existing local-plugin lifecycle-rejection rule rather than inventing a new one**: the design doc already states that a local plugin declaring hooks/MCP/settings is *rejected by static doctor* (§12, implemented as `crate::probes::check_no_plugin_lifecycle_components`, error code `ENTRYPOINT_INVALID`, doctor check name `entrypoint`). This iteration extends exactly that principle to the wiki's own project settings: a new `crate::config::check_claude_wiki_settings_surface` inspects `project_root/.claude/settings.json` and `settings.local.json` and fails the wiki closed, same error code, same check name, if either file declares any key outside a closed allowlist.
+
+**Deny-by-default posture, deliberately an allowlist, not a denylist** (per instruction, and justified in the code comment): only `enabledPlugins` and `permissions.{allow,deny,defaultMode}` are admitted. `enabledPlugins` is data the wiki operator's own trusted configuration legitimately uses and does not itself execute anything or widen reach — the real `harness-engineering` wiki has exactly `{"enabledPlugins":{"llm-wiki@llm-wiki":true}}`. `permissions.allow/deny/defaultMode` are already bounded by the fixed `--tools Read,Grep,Glob`/`--permission-mode dontAsk` argv — they cannot grant a tool this project's own argv does not expose. `permissions.additionalDirectories` is specifically excluded from that admitted set (it widens reach). Every other key — enumerated today or not — fails closed. A denylist would only ever cover the keys named today; an allowlist survives a future Claude Code release adding another executable/reach-widening setting this project has never heard of.
+
+**Error code**: reused `ENTRYPOINT_INVALID` (no new code) and the existing `entrypoint` doctor check name — both chosen to mirror the local-plugin-lifecycle mechanism exactly, per instruction, rather than inventing a parallel taxonomy.
+
+**TOCTOU, closed rather than merely documented** (per instruction's stated preference): the same check now runs in **both** `src/doctor.rs::entrypoint_check` and `src/query.rs::QueryService::query` (Step 6, Claude branch, before the provider is ever invoked) — a wiki's settings changing between a passing `doctor` run and a later `query` cannot slip past a stale check the way the skill-fingerprint probe gate would otherwise let it (that gate only re-verifies the *skill* fingerprint, not the settings surface). The residual, honestly stated: an admin-managed/enterprise-policy hook cannot be disabled or detected by any flag or check this project controls — unchanged from iterations 1-2, still verified absent on the implementation machine.
+
+**TDD, with a genuine red run demonstrated by disabling the fix, not by deleting it**: eight unit tests in `tests/config_contract.rs` (no settings files at all passes; `harness-engineering`'s real `enabledPlugins`-only shape passes; `permissions.{allow,deny,defaultMode}` passes; `permissions.additionalDirectories` rejected; all ten named denied keys — `hooks`, `apiKeyHelper`, `awsCredentialExport`, `awsAuthRefresh`, `gcpAuthRefresh`, `otelHeadersHelper`, `statusLine`, `env`, `enableAllProjectMcpServers`, `enabledMcpjsonServers` — each independently rejected; `settings.local.json` checked independently of `settings.json`; malformed JSON and non-object JSON both fail closed rather than being silently skipped), three doctor-level integration tests in `tests/doctor.rs` (forbidden key fails the `entrypoint` check; the real `harness-engineering` shape still passes; a Codex pair is unaffected by a forbidden *Claude* settings key), and two query-level integration tests in `tests/query_service.rs` (a forbidden key is rejected before any process spawn — proven the same way `validate_before_spawn` already does, via a `FakeProcessRunner` with zero queued responses that would panic on any real spawn attempt; the benign `enabledPlugins`-only case still succeeds end to end).
+
+A genuine RED run was captured by temporarily short-circuiting both enforcement call sites (`if false && ...` in `doctor.rs`/`query.rs`, restored byte-identical afterward via `diff` against a backup, not merely reasoned about): `cargo test --test doctor --test query_service --no-fail-fast -- --test-threads=1` → 2 failures, exactly the two new integration tests that depend on enforcement (`claude_wiki_settings_declaring_a_forbidden_key_fails_entrypoint_check`: `assertion left == right failed, left: Pass, right: Fail`; `query_rejects_a_forbidden_claude_wiki_settings_key_before_any_spawn`: `FakeProcessRunner::run called with no queued response` — proving the check truly gates before any spawn, not merely that it returns an error eventually). Restored, re-ran: exit 0, all green again.
+
+### Finding 2 (important, confirmed) — argv tests pinned against the production constant, not a literal
+
+`tests/claude_adapter.rs`'s `exact_argv` and the hook-neutralization test both compared the built argv against `DISABLE_ALL_HOOKS_SETTINGS`, the same constant `src/providers/claude.rs::build_argv` uses to construct it — flipping the constant to `{"disableAllHooks":false}` would have kept both tests green, since the test and the code under test would drift together. Fixed: both now assert the literal string `{"disableAllHooks":true}` as the expected value; `exact_argv` additionally asserts the constant itself still equals that literal, so a future drift between the two is caught by a second, independent assertion. **Verified this actually catches the drift Codex named**, not merely reasoned about: manually flipped the constant to `false` in `src/providers/claude.rs`, re-ran `cargo test --test claude_adapter -- exact_argv hook_neutralization` → both failed with exactly the expected diff (`{"disableAllHooks":false}` vs. `{"disableAllHooks":true}`); reverted, re-ran → both green again.
+
+### Finding 3 (minor, confirmed) — checklist discrepancy, explicit note for Task 16, checklist not touched
+
+`docs/verification/llm-wikis-v0.1.0-checklist.md` row `PROC-22` ("exact Claude argv vector matches §10.2 target invocation") records the **pre-R-27** canonical argv as its expected value — it has neither `--settings {"disableAllHooks":true}` (R-27/R-28) nor any awareness of the R-29 deny check. Per instruction, **the checklist was not edited** — it is the independent reviewer's artifact and Task 16's verifier owns `status`/`evidence` changes to it exclusively. Recorded here instead, as an explicit input for Task 16: **`PROC-22`'s expected argv needs re-derivation against the current spec §10.2 canonical invocation (now including `--settings {"disableAllHooks":true}`) before that row can be judged PASS/FAIL** — its current text would incorrectly fail the real, correct, currently-shipped argv.
+
+### Codex/`.agents`/`.codex` investigation — not extended, reasoning stated
+
+Investigated whether Codex needs an equivalent deny check, per instruction. Findings, from `codex exec --help`/`codex --help` output and web-documented Codex behavior (cited in the spec §10.2 R-29 text and `docs/llm-wikis.md` layer 16):
+
+- Codex has an analogous project-level configuration surface (`.codex/config.toml`, project-local hooks via `hooks.json`/inline `[hooks]` tables, and project execpolicy `.rules` files) and its own hook-trust concept (`--dangerously-bypass-hook-trust`, "Run enabled hooks without requiring persisted hook trust for this invocation").
+- Unlike Claude's `-p` mode (which loads project/local settings unconditionally), Codex loads this entire project `.codex/` layer **only for a project it considers trusted**. An untrusted project's `.codex/config.toml`, project-local hooks, and project-local execpolicy rules are not loaded at all.
+- This wrapper's Codex invocation (`src/providers/codex.rs::build_argv`, spec §10.3) never establishes trust for the wiki's `project_root` — no interactive prompt occurs, `--skip-git-repo-check` and `--ask-for-approval never` do not grant it. So this class of surface fails closed by Codex's own architecture, without any `llm-wikis`-side change.
+- Neither registered wiki's `.codex/` (empty) or `.agents/` (contains only `skills/`) directory presently contains any hooks/config/execpolicy file, so there was nothing to reproduce a live escape against even if one were suspected.
+
+**Decision**: no Codex-side code change, no new Codex-side doctor check, and consequently **no Codex argv change** — `src/providers/codex.rs` was not touched in this iteration. LIVE-02/LIVE-04 were therefore **not** re-run, per the instruction's own condition ("unless your investigation changes Codex-side behavior, in which case re-run them"). One optional hardening was considered and deliberately deferred rather than added speculatively: `--ignore-rules` (disables loading project/user execpolicy `.rules` files) would be pure belt-and-suspenders on top of the trust gate already described — cheap, but a genuine Codex argv change that would itself need a live re-verification of LIVE-02/04 to justify, against a surface with no proven vulnerability and no current exposure in either real wiki. Flagged here for the orchestrator/user to request explicitly if wanted; not applied unilaterally.
+
+### Gates
+
+`cargo fmt --check` -> exit 1 first pass (one formatting diff in `src/query.rs`, from `cargo fmt` collapsing a multi-line call — not a manual edit) -> `cargo fmt` -> `cargo fmt --check` -> exit 0. `cargo clippy --all-targets --all-features -- -D warnings` -> exit 0, clean. `cargo test --all-targets --all-features --no-fail-fast -- --test-threads=1` -> exit 0, **344 passed, 0 failed** (331 from before this iteration + 13 new: 8 in `config_contract`, 3 in `doctor`, 2 in `query_service`).
+
+### Escape-fixture verification (orchestrator's exact scenario, reproduced, zero model quota)
+
+Built a disposable scratch fixture (outside the repo, outside D:\Wikis) reproducing the orchestrator's proof shape: a `project_skill`-mode wiki whose `.claude/settings.json` is exactly `{"apiKeyHelper":"echo hooked"}`. Ran the corrected binary's **static** `doctor` (no `--live`, zero model quota) against it:
+
+```text
+{"name":"entrypoint","status":"fail","code":"ENTRYPOINT_INVALID",
+ "message":"wiki .claude/settings.json declares a rejected settings key: apiKeyHelper"}
+```
+
+Exit `2`, `ok:false`. **The orchestrator's escape fixture is now rejected**, confirmed directly through the real binary, not only through unit tests.
+
+### Re-verification of LIVE-01, LIVE-03, LIVE-09 under the new doctor/query behavior — all PASS
+
+Doctor behavior changed (a new preflight check exists), so per instruction all three previously-passing Claude rows were re-run through the rebuilt binary, on Claude Code 2.1.221 (unchanged from iteration 2). LIVE-02/LIVE-04 not re-run (reasoning above — Codex argv unchanged).
+
+**Independent before/after integrity check:**
+
+| Wiki | Checked at | count / digest | Identical to baseline |
+|---|---|---|---|
+| `D:\Wikis\agents` | before this batch | 124 / `fc2a39fc50b870ad23ec822b3ad6e5889b3dfb89beb2ddde0ab379b07b933b0a` | (baseline, unchanged all task) |
+| `D:\Wikis\agents` | after LIVE-01 (PASS) | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\agents` | final check, after LIVE-09 | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\harness-engineering` | before this batch | 697 / `076ae8ddd8bdb4e3f39650988487f067d75aa22b18164eb1bdf1b56d1cdb12e9` | (baseline, unchanged all task) |
+| `D:\Wikis\harness-engineering` | after LIVE-03 (PASS) | 697 / `076ae8dd...cdb12e9` | yes |
+| `D:\Wikis\harness-engineering` | final check, after LIVE-09 | 697 / `076ae8dd...cdb12e9` | yes |
+
+Also confirmed via static (non-billable) `doctor --json doctor --agent claude` before any live call: `ok:true` for all three registered Claude wikis (`agents`, `harness-engineering`, `live09-fixture`), including `harness-engineering`'s real `enabledPlugins`-only `settings.local.json` passing the new check cleanly.
+
+**Per-row results:**
+
+| Row | Result | Provider version | Duration (doctor --live + query) | raw_format | knowledge_status | Citations found/resolved | Warnings |
+|---|---|---|---|---|---|---|---|
+| LIVE-01 (Claude/`agents`) | **PASS** | Claude Code 2.1.221 | 19358ms + 13825ms | `claude-json` | grounded | 2/2 | `PROVIDER_WARNING` (model-reported scope note; no `CLAUDE_READ_SCOPE_BROAD`, correct — roots equal) |
+| LIVE-03 (Claude/`harness-engineering`) | **PASS** | Claude Code 2.1.221 | 21391ms + 20362ms | `claude-json` | grounded | 2/2 | `CLAUDE_READ_SCOPE_BROAD` present, correct — strict containment; **the critical `enabledPlugins`-only case, confirmed still working end to end** |
+| LIVE-09 (Claude local-plugin fixture) | **PASS** | Claude Code 2.1.221 | 17696ms + 17381ms | `claude-json` | grounded | 1/1 | none |
+
+### Scope discipline
+
+`src/config.rs` (new `check_claude_wiki_settings_surface` + two constants), `src/doctor.rs` (one call site), `src/query.rs` (one call site, closing TOCTOU), `src/providers/claude.rs` (corrected trust-boundary doc comment; Finding-2 fix reused the same file), `tests/config_contract.rs`/`tests/doctor.rs`/`tests/query_service.rs`/`tests/claude_adapter.rs` (new/corrected tests), `docs/2026-07-28-llm-wikis-external-query-design.md` (0.2.5→0.2.6, R-29), `docs/llm-wikis.md` (§3.4/§3.8 corrected), and this checkpoint were touched. `docs/verification/llm-wikis-v0.1.0-checklist.md` was **not** touched (Finding 3, recorded as a note above instead). `src/providers/codex.rs` was **not** touched (investigated, reasoning above). Nothing under D:\Wikis was written at any point (six independent digest checks above, all identical, plus the static-doctor sanity check). No test was weakened: every new/changed assertion is strictly additive or strictly stronger (Finding 1's tests are new; Finding 2's fix replaces a self-referential comparison with a literal one, which can only fail more often, never less).
