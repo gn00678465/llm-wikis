@@ -5,7 +5,7 @@
 ```text
 D1 two real knowledge bases: D:\Wikis\agents and D:\Wikis\harness-engineering. Never written to.
 D2 no Git repository: approved 2026-07-29. Checkpoints replace commits. Task 14 blocked.
-Specification version in force: 0.2.4 (amended 2026-07-30, corrected 2026-07-31 after independent re-review, corrected 2026-08-04 for R-27 Claude wiki-side hook neutralization — see its Revision History).
+Specification version in force: 0.2.5 (amended 2026-07-30, corrected 2026-07-31 after independent re-review, corrected 2026-08-04 for R-27 Claude wiki-side hook neutralization then corrected again the same day as R-28 after a live experiment showed R-27 broke project-skill discovery — see its Revision History).
 ```
 
 ## Task 0 environment
@@ -552,3 +552,84 @@ After the earlier auth-parser fix (checkpoint above) made `ClaudeAuthStatusDocum
 ### Result
 
 - result: **PASS** — all three Codex-reviewed, orchestrator-verified findings fixed; TDD followed throughout (Finding 1's two tests captured genuinely RED before GREEN); the Finding-1 vulnerability was empirically reproduced live before being empirically confirmed closed, on a disposable fixture, never a registered wiki; full offline gates clean; nothing under D:\Wikis touched. Per the new process rule, this loop continues — commit, push, and report back to the reviewer/orchestrator for another pass before Task 16 can begin.
+
+## Review loop iteration 2 (regression caught by the orchestrator, corrected fix, 2026-08-04)
+
+- completed_utc: 2026-08-04T00:00:00Z
+- commits: 24da5af (fix: remove --setting-sources from the Claude hooks fix); commit 2 recorded once made (this checkpoint)
+- worker: task15-docs-live-worker-2026-08-02 (re-verification, diagnosis input, corrected fix, TDD, re-verification live rows); orchestrator (caught the regression gap, ran the live four-arm diagnostic experiment and the two validation arms, ruled on the corrected fix)
+- files: src/providers/claude.rs 0d338a5a1ca265fb18045ee3520f54640ed8cb3c82271e6ae4c425b456d612ce
+- files: tests/claude_adapter.rs dec648d2051efd588aaa7f0203b47a12331c11e4a6615e5b832d7e8e594ffba0
+- files: docs/llm-wikis.md 25e20776cde32a9f94d432864260dda2d032110a453371323b4b95ea66dd381b
+- files: docs/2026-07-28-llm-wikis-external-query-design.md 7ec1af835aba39e06e190f059416ca8c401d8ad56f894e49cd1fd64b7d77207b
+- files: docs/verification/llm-wikis-execution.md self (this section)
+- result: PASS
+
+### The gap the orchestrator caught
+
+Iteration 1's Finding-1 fix (commit `987fe97`) changed the Claude argv, but LIVE-01/03/09's PASS evidence in this checkpoint was gathered under the *old* argv — that evidence no longer applied to the shipped code, and there was a concrete mechanism by which it could have broken (`harness-engineering`'s `.claude/settings.local.json` enables a plugin, `enabledPlugins":{"llm-wiki@llm-wiki":true}`, that `--setting-sources user` would stop loading; whether `/llm-wiki` actually resolved through that plugin path or through the project-skill file was unverified). Per the plan's fix-and-reverify loop rule, this required re-running the three affected rows before Task 16 could proceed.
+
+### Re-verification attempt (this worker) — FAILED, stopped immediately as instructed
+
+`doctor --live --wiki agents --agent claude` under the iteration-1 argv (commit `987fe97`) returned `ok:false`, exit `6`: `live_contract` failed `INVALID_NATIVE_OUTPUT`, `"claude result text was not valid wiki-query/v1 JSON: expected value at line 1 column 1"`, duration **2928ms** (far faster than any real model turn in this task). `mutation`: `pass`; the `D:\Wikis\agents` digest was unchanged (124 files, `fc2a39fc...`, identical). A confound was noted and flagged rather than guessed at: `claude --version` now reported **2.1.221**, not the **2.1.220** every prior row in this task had run against — the CLI had auto-updated mid-loop, and this worker could not distinguish "the argv change broke it" from "the CLI update broke it" without further live calls it was not authorized to make. Per instruction, this worker stopped immediately: no LIVE-03/09 attempt, no fix attempt, evidence reported to the orchestrator.
+
+### Root-cause diagnosis (orchestrator) — a live four-arm controlled experiment on a disposable scratch fixture, never a registered wiki
+
+Same fixture family as iteration 1's hook PoC (outside the repo, outside D:\Wikis), on Claude Code 2.1.221 throughout, isolating the CLI-update variable from the argv-change variable:
+
+| Arm | Argv | Entrypoint | Result |
+|---|---|---|---|
+| A | old (pre-iteration-1) | plain prompt, no slash command | exit 0, valid JSON — rules out the 2.1.220→2.1.221 update alone |
+| B | iteration-1 (`--setting-sources user` + `--settings`) | plain prompt | exit 0, valid JSON — rules out the new flags alone when no project skill is involved |
+| C | iteration-1 | `/probe` project-skill slash entrypoint (`<cwd>/.claude/skills/probe/SKILL.md`) | `"result":"Unknown command: /probe"`, `duration_ms:13`, `total_cost_usd:0` — **exactly** the LIVE-01 failure signature |
+| D | old | same `/probe` entrypoint | works, `structured_output` returned |
+
+**Root cause**: `--setting-sources user` excludes the `project` setting source, and Claude's **project-skill discovery is itself gated on that source** — this is not specific to `harness-engineering`'s `enabledPlugins` (that mechanism turned out to be a red herring, correctly flagged as unverified rather than assumed); it affects **both** real registered wikis, since both use `project_skill` load mode (`/wiki-query`, `/llm-wiki`).
+
+Two further arms validated the corrected fix, on the same fixture, now carrying both a project skill and a project `SessionStart` hook (writing a marker file):
+
+| Arm | Argv | Result |
+|---|---|---|
+| E | `--settings {"disableAllHooks":true}` only (no `--setting-sources`) | skill resolved and answered correctly (`structured_output` returned) **and** no marker file — hook blocked |
+| F | neither flag (control) | marker file **was** created — confirms the hook is genuinely live in this fixture, so E's absence is real suppression, not a fixture artifact |
+
+### Corrected fix
+
+`src/providers/claude.rs::build_argv` no longer emits `--setting-sources user`; `--settings {"disableAllHooks":true}` is kept unchanged, directly after `--json-schema`. `tests/claude_adapter.rs::exact_argv` now pins the corrected (shorter) argv exactly; the iteration-1 dedicated test was replaced (not left stale) with `hook_neutralization_settings_flag_present_without_excluding_setting_sources`, which pins `--settings`'s position and value **and** explicitly asserts `--setting-sources` never appears — a regression test against reintroducing the exact mistake this iteration corrects. Both changes were confirmed against the running suite: `cargo test --test claude_adapter -- --test-threads=1` → 21/21 passed after the correction (same count as iteration 1 — one test replaced, not added or removed).
+
+**Trust boundary, corrected and stated honestly** (in `src/providers/claude.rs`'s doc comment, `docs/2026-07-28-llm-wikis-external-query-design.md` §10.2/§12, and `docs/llm-wikis.md` §3.4, all three updated to match): the wiki's own project/local settings **are** loaded — required for skill discovery — and their reach is bounded by three independent layers rather than by non-loading: (a) `--settings {"disableAllHooks":true}` disables every hook regardless of source; (b) `--strict-mcp-config` plus the empty MCP config locks out any MCP server the settings might declare; (c) `--tools Read,Grep,Glob` bounds the built-in tool surface regardless of any tool-related setting. Residual gaps stated plainly: other keys in the wiki's settings are loaded and not individually enumerated or denied, only bounded by (a)-(c); and no CLI flag disables an admin-managed/enterprise-policy hook regardless (unchanged from iteration 1, and still verified absent on the implementation machine).
+
+**Spec versioning decision**: bumped 0.2.4 → **0.2.5** with a new revision ID **R-28**, rather than silently rewriting R-27's text in place. Judgment: this is a correction-of-a-correction to a spec-pinned argv (§10.2 is explicitly pinned per §6.2's "Every load mode is disabled for normal query until `doctor --live` succeeds... against... the exact current [...] entrypoint" discipline), material enough to affect both registered wikis' primary load mode, and the document's own established practice (0.2.2 → 0.2.3 was likewise "second correction from the same Task 2 Step 13 loop") is to give each substantive correction its own version and revision-history row rather than editing history in place — preserving an accurate record of what was actually shipped between commits `987fe97` and the correction commit below, not just what is true now.
+
+### Gates (post-correction)
+
+`cargo fmt --check` -> exit 0 (no diff). `cargo clippy --all-targets --all-features -- -D warnings` -> exit 0, clean on the first pass. `cargo test --all-targets --all-features --no-fail-fast -- --test-threads=1` -> exit 0, **331 passed, 0 failed** (identical total to iteration 1 — one test replaced; both process_supervisor timing tests passed this run too).
+
+### Re-verification of LIVE-01, LIVE-03, LIVE-09 under the corrected argv — all PASS
+
+All three ran through the rebuilt binary (`doctor --live` then `query`, same procedure as the original Step 6), on **Claude Code 2.1.221** (every prior Claude row in this task ran on 2.1.220 — the CLI auto-updated mid-loop, ruled out as a contributing cause by arms A/B above, but noted here for the record since it is a real environment change across this task's evidence). LIVE-02/LIVE-04 were **not** re-run: the Codex argv (`src/providers/codex.rs::build_argv`) was untouched by commit `987fe97` or by this correction, so their iteration-1-final evidence (both PASS, `codex-jsonl`, `CODEX_READ_SCOPE_BROAD` present) still applies unchanged.
+
+**Independent before/after integrity check**, same technique as every prior batch in this task:
+
+| Wiki | Checked at | count / digest | Identical to baseline |
+|---|---|---|---|
+| `D:\Wikis\agents` | before this re-verification batch | 124 / `fc2a39fc50b870ad23ec822b3ad6e5889b3dfb89beb2ddde0ab379b07b933b0a` | (baseline, unchanged all task) |
+| `D:\Wikis\agents` | after the failed re-verification attempt (this worker, iteration-1 argv) | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\agents` | after LIVE-01 (corrected argv, PASS) | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\harness-engineering` | before LIVE-03 | 697 / `076ae8ddd8bdb4e3f39650988487f067d75aa22b18164eb1bdf1b56d1cdb12e9` | (baseline, unchanged all task) |
+| `D:\Wikis\harness-engineering` | after LIVE-03 (corrected argv, PASS) | 697 / `076ae8dd...cdb12e9` | yes |
+| both wikis | final check, after LIVE-09 | 124/`fc2a39fc...` and 697/`076ae8dd...` | yes, both |
+
+**Per-row results:**
+
+| Row | Result | Provider version | Duration (doctor --live + query) | raw_format | knowledge_status | Citations found/resolved | Warnings |
+|---|---|---|---|---|---|---|---|
+| LIVE-01 (Claude/`agents`) | **PASS** | Claude Code 2.1.221 | 21001ms + 14269ms | `claude-json` | grounded | 2/2 | `PROVIDER_WARNING` (model-reported: it did not regenerate the index before answering, per the external-readonly constraints — no `CLAUDE_READ_SCOPE_BROAD`, correct, roots equal) |
+| LIVE-03 (Claude/`harness-engineering`) | **PASS** | Claude Code 2.1.221 | 19929ms + 21145ms | `claude-json` | grounded | 2/2 | `CLAUDE_READ_SCOPE_BROAD` present, correct — strict containment |
+| LIVE-09 (Claude local-plugin fixture) | **PASS** | Claude Code 2.1.221 | 18763ms + 20584ms | `claude-json` | grounded | 2/2 | none |
+
+LIVE-01's `PROVIDER_WARNING` is new relative to its iteration-1 run (which had none) — this is normal model-output variability between independent live calls, not a contract or safety concern: it is the model explicitly stating it respected the read-only/no-index-regeneration constraint, which is the external-readonly contract (spec §7.2) working as designed.
+
+### Scope discipline
+
+Only `src/providers/claude.rs` (the `--setting-sources` removal, corrected doc comment), `tests/claude_adapter.rs` (one test replaced), `docs/2026-07-28-llm-wikis-external-query-design.md` (0.2.4→0.2.5, R-28, corrected §10.2/§12 text), `docs/llm-wikis.md` (§3.4 corrected), and this checkpoint were touched. No Codex-side file was touched (correctly — the Codex argv was never part of this regression). Nothing under D:\Wikis was written at any point in this iteration (five independent digest checks above, all identical). No test was weakened: the replaced test asserts strictly more than a bare "flags present" check (it also asserts `--setting-sources`'s absence, a regression guard the iteration-1 test did not have).
