@@ -570,6 +570,25 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
                 ) {
                     warnings.push(w);
                 }
+                // R-32: advisory-only read of the same wiki-settings check
+                // that `ClaudeAdapter::invoke` runs authoritatively right
+                // before spawn (Step 11) -- this early call exists only to
+                // surface CLAUDE_ENABLED_PLUGINS_DECLARED as early as
+                // possible for a human reading the envelope, not to enforce
+                // anything. A forbidden-key `Err` here is deliberately
+                // ignored: the query does not fail at this point, because
+                // failing it here would be exactly the "check early, leave
+                // a wide gap" pattern R-31 exists to avoid. The one place
+                // this check's `Err` is authoritative is `invoke`'s own call
+                // to the same function.
+                if let Ok(true) =
+                    crate::config::check_claude_wiki_settings_surface(&roots.project_root)
+                {
+                    warnings.push(crate::output::Warning::wrapper(
+                        crate::output::WrapperWarningCode::ClaudeEnabledPluginsDeclared,
+                        crate::config::CLAUDE_ENABLED_PLUGINS_DECLARED_MESSAGE,
+                    ));
+                }
             }
             Agent::Codex => {
                 warnings.push(crate::providers::codex::read_scope_broad_warning());
@@ -691,27 +710,18 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
             }
         };
 
-        // R-30: re-run the same wiki-settings surface check `doctor` runs,
-        // as late as possible -- immediately before the provider is spawned,
-        // after every other step (version/auth probes, fingerprint gate,
-        // prompt build, before-snapshot) rather than back in Step 6 -- to
-        // narrow the window between "this was checked safe" and "the
-        // provider actually reads it" as much as this wrapper can. This is
-        // a narrowing, not a closure: an attacker who can write to the
-        // wiki's `.claude/` directory between this check and the process
-        // actually starting still wins that race. Eliminating the window
-        // entirely would require OS-level isolation (a filesystem snapshot
-        // held for the duration of the child process, or a mandatory-access-
-        // control policy), which is out of this project's scope; see the
-        // doc comment on `check_claude_wiki_settings_surface` and spec §10.2
-        // R-30 for the full, honestly-stated residual.
-        if agent == Agent::Claude
-            && let Err(e) = crate::config::check_claude_wiki_settings_surface(&roots.project_root)
-        {
-            let elapsed = self.elapsed_ms(start);
-            return Ok(fail(warnings, None, None, e, elapsed));
-        }
-
+        // R-31: the Claude wiki-settings surface check itself now runs
+        // inside `ClaudeAdapter::invoke`, immediately before the child
+        // process is actually spawned -- not here. A prior version ran it
+        // at this point (Step 10.5), but plugin-dir canonicalization,
+        // `ProviderRequest` construction, temp-dir resolution, temp-file
+        // creation, and argv/schema construction all still happened between
+        // this point and the real spawn, none of which this check needs to
+        // precede. One function (`crate::config::check_claude_wiki_settings_surface`)
+        // is still the single source of truth, called from both `doctor`
+        // (`src/doctor.rs`) and the Claude adapter's `invoke` -- not
+        // duplicated here.
+        //
         // Steps 11-12 (spec §8.1): invoke the provider; timeout/output-cap/
         // process-tree enforcement happens inside the process supervisor.
         self.step("invoke");

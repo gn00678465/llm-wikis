@@ -638,8 +638,13 @@ fn claude_wiki_settings_declaring_a_forbidden_key_fails_entrypoint_check() {
 }
 
 #[test]
-fn claude_wiki_settings_with_only_enabled_plugins_still_passes_matching_the_real_harness_engineering_wiki()
+fn claude_wiki_settings_with_only_enabled_plugins_still_succeeds_with_the_r32_advisory_warning_matching_the_real_harness_engineering_wiki()
  {
+    // R-32: enabledPlugins is still admitted (an explicit, evidence-backed
+    // risk acceptance, not denied) -- so the real harness-engineering wiki's
+    // settings.local.json keeps working -- but doctor now surfaces
+    // CLAUDE_ENABLED_PLUGINS_DECLARED as a warning on the same "entrypoint"
+    // check, not a silent pass, so an operator is told plainly.
     let fixture = build_fixture();
     fs::write(
         fixture.project_root.join(".claude/settings.local.json"),
@@ -654,7 +659,11 @@ fn claude_wiki_settings_with_only_enabled_plugins_still_passes_matching_the_real
     let request = doctor_request(&fixture, config, None, None, false);
     let envelope = run_doctor(request, runner, &store);
     let check = find_check(&envelope, WIKI_ID, Agent::Claude, "entrypoint").unwrap();
-    assert_eq!(check.status, CheckStatus::Pass);
+    assert_eq!(check.status, CheckStatus::Warn);
+    assert_eq!(
+        check.code.as_deref(),
+        Some("CLAUDE_ENABLED_PLUGINS_DECLARED")
+    );
 }
 
 #[test]

@@ -473,20 +473,30 @@ layers stack:
    introduce a new plugin source of its own. The real `harness-engineering`
    wiki has exactly `enabledPlugins` and keeps working. Anything else fails
    closed, including a setting a future Claude Code release adds that this
-   project has never heard of. A settings path that is a symlink, junction,
-   reparse point, directory, or other non-regular-file entry is rejected as
-   `UNSAFE_FILESYSTEM_ENTRY` rather than silently treated as absent — a
-   dangling symlink would otherwise report "not found," pass the check, and
-   let its target be created afterward.
-8. This check runs at both `doctor` time and, as late as this wrapper can
-   arrange — immediately before the provider process is actually spawned,
-   after every other query step — `query` time too, so a wiki's settings
-   changing between a `doctor` pass and a later `query` cannot slip past a
-   stale result. **This narrows the window between "checked safe" and "the
-   provider reads it," it does not close it**: a write to the wiki's
-   `.claude/` directory landing in the instant between this check and the
-   process actually starting still wins that race. Eliminating the window
-   entirely would need OS-level isolation this wrapper does not provide.
+   project has never heard of. A settings path — **or the `.claude`
+   directory itself** — that is a symlink, junction, reparse point,
+   directory-where-a-file-was-expected, or other non-regular entry is
+   rejected as `UNSAFE_FILESYSTEM_ENTRY` rather than silently treated as
+   absent: checking only the two settings filenames is not enough, since a
+   `.claude` *directory* that is itself a symlink pointing at an empty (or
+   not-yet-existing) external location would pass a plain existence check on
+   both filenames the same way a dangling file-level symlink would, letting
+   the real settings file be created at the true target afterward — this
+   wrapper checks `.claude` itself first, then each settings file.
+8. This check runs at both `doctor` time and, at `query` time, as the
+   genuinely last thing before the child process is spawned — inside the
+   Claude provider adapter itself, immediately before the one call that
+   starts the real `claude` process, after every other query step
+   (executable/version/auth probes, the live-probe fingerprint gate, prompt
+   construction, the before-snapshot, and this request's own temp-file/argv
+   setup) has already run — so a wiki's settings changing between a `doctor`
+   pass and a later `query` cannot slip past a stale result. **This narrows
+   the window between "checked safe" and "the provider reads it" to the
+   remaining syscall gap; it does not close it**: a write to the wiki's
+   `.claude/` directory landing in the instant between this check returning
+   and the operating system actually starting the child process still wins
+   that race. Eliminating the window entirely would need OS-level isolation
+   this wrapper does not provide.
 9. On top of layers 7-8, `--settings {"disableAllHooks":true}` neutralizes
    every hook from every source for the session (CLI-supplied settings
    outrank user/project/local settings), `--strict-mcp-config`'s empty MCP
@@ -610,8 +620,9 @@ paid call per wiki/agent pair you verify this way.
 | `PATH_OUTSIDE_ALLOWED_ROOT` / `UNSAFE_FILESYSTEM_ENTRY` | A configured path resolves outside its declared root, or a symlink/junction/reparse/mount was found in a scanned tree — including, for a Claude wiki, at `.claude/settings.json`/`settings.local.json` itself (§3.4 layer 7) | Fix the offending path in config; do not symlink inside a monitored tree, the configured skill directory, or (Claude) the wiki's settings files |
 | `WIKI_INVALID` | `content_root` is missing, not a directory, or has zero `.md` files anywhere beneath it | Point `content_root` at a real directory that actually contains the wiki's Markdown pages |
 | `WIKI_SCHEMA_ABSENT` (warning, not a failure) | No `SCHEMA.md` at `content_root` | **Usually means `content_root` points one level too high** (or, less often, one level too low) — most wiki toolchains put `SCHEMA.md` at the wiki root, so this is an expensive-not-fatal hint to re-check the exact directory, not something you need to fix to proceed |
+| `CLAUDE_ENABLED_PLUGINS_DECLARED` (warning, not a failure) | Claude only — the wiki's settings declare `enabledPlugins` (§3.4 layer 7) | Informational: `enabledPlugins` is admitted, but the message states this is an evidence-backed risk acceptance, not a documented CLI guarantee — nothing to fix unless you want the wiki to stop declaring it |
 | `PROVIDER_CONFIG_MISSING` / `AGENT_UNSUPPORTED` | Wiki enables an agent with no matching `[providers.<agent>]` table, or a wiki you queried never enabled that agent at all | Add the global provider table, or use an agent the wiki actually enables |
-| `ENTRYPOINT_INVALID` | Entrypoint syntax is wrong, the statically-addressable skill/plugin file doesn't exist where configured, or — Claude only — the wiki's own `.claude/settings.json`/`settings.local.json` declares a key outside the small admitted allowlist (§3.4 layer 7) | Check `/name`, `/plugin:skill`, or `$name` syntax; check `skill_path`/`plugin_dir` resolve to a real file; for the settings case, the message names the rejected key — remove it from the wiki's settings, or (for `enabledPlugins`/`permissions.{allow,deny,defaultMode}`) confirm it's spelled exactly right |
+| `ENTRYPOINT_INVALID` | Entrypoint syntax is wrong, the statically-addressable skill/plugin file doesn't exist where configured, or — Claude only — the wiki's own `.claude/settings.json`/`settings.local.json` declares a key outside the small admitted allowlist (§3.4 layer 7) | Check `/name`, `/plugin:skill`, or `$name` syntax; check `skill_path`/`plugin_dir` resolve to a real file; for the settings case, the message names the rejected key — remove it from the wiki's settings (only `enabledPlugins` is admitted; `permissions` and everything else is rejected outright, regardless of spelling) |
 | `CLI_NOT_FOUND` | The configured provider executable isn't resolvable | Check `providers.<agent>.executable`, install/PATH the provider CLI |
 | `AUTH_REQUIRED` | The provider's own status command reports logged out | Log in to that provider CLI directly (`claude`/`codex` login flow) — `llm-wikis` never handles credentials itself |
 | `ENTRYPOINT_UNVERIFIED` | No current live-doctor probe for this exact fingerprint | Run `doctor --wiki <id> --agent <agent> --live` (§2.9) |

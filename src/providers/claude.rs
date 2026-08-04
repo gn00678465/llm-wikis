@@ -51,63 +51,35 @@ pub const DISABLE_ALL_HOOKS_SETTINGS: &str = "{\"disableAllHooks\":true}";
 /// Builds the exact Claude argv vector (spec §10.2). Never includes the
 /// entrypoint or `query_prompt` — those exist only in the stdin prompt.
 ///
-/// **Threat this argv defends against, and the corrected mechanism (spec
-/// §10.2 R-27, PR #1 Codex review finding 1, review loop iteration 2)**:
-/// `invoke`'s child cwd is the wiki's own `project_root`, an untrusted
-/// operator-controlled directory this wrapper does not own. Claude Code's
-/// `-p` mode auto-loads that directory's `.claude/settings.json` /
+/// **Threat this argv's `--settings` flag defends against (spec §10.2
+/// R-27)**: `invoke`'s child cwd is the wiki's own `project_root`, an
+/// untrusted operator-controlled directory this wrapper does not own. Claude
+/// Code's `-p` mode auto-loads that directory's `.claude/settings.json` /
 /// `settings.local.json` and **runs any hooks they declare** (SessionStart,
 /// PreToolUse, ...) as arbitrary shell — entirely outside the `--tools
 /// Read,Grep,Glob` gate, which restricts only built-in tools, not hook
-/// commands. `.claude/`/`.agents/` immediately under `content_root` are also
-/// excluded from the mutation snapshot (spec §12), so a hook's writes there
-/// would be undetectable.
+/// commands. [`DISABLE_ALL_HOOKS_SETTINGS`] disables every hook regardless
+/// of source. `--setting-sources user` was tried instead/in addition (R-27)
+/// and reverted (R-28) — it also excludes the `project` setting source that
+/// Claude's project-skill discovery itself depends on, breaking every
+/// `project_skill`-load-mode wiki's entrypoint; it is **not** used here.
 ///
-/// An earlier version of this fix additionally passed `--setting-sources
-/// user`, intending to exclude the wiki's project/local settings entirely.
-/// That broke the tool's primary load mode: Claude's **project-skill
-/// discovery is itself gated on the `project` setting source** — excluding
-/// it made every `project_skill`-load-mode wiki's slash entrypoint resolve
-/// to `"Unknown command: /<name>"` instead of invoking the skill, confirmed
-/// by a live four-arm controlled experiment (`docs/verification/llm-wikis-execution.md`
-/// Task 15, "review loop iteration 2"). `--setting-sources` is **not**
-/// used here.
-///
-/// The wiki's own project/local settings **are** loaded (required for skill
-/// discovery) — this argv alone is **not** the full trust boundary. Their
-/// reach is bounded by three layers here — (a) [`DISABLE_ALL_HOOKS_SETTINGS`]
-/// disables every hook regardless of source; (b) `--strict-mcp-config` plus
-/// an empty MCP config locks out any MCP server the settings might declare;
-/// (c) `--tools Read,Grep,Glob` bounds the built-in tool surface regardless
-/// of any tool-related setting — **plus a fourth, load-bearing layer outside
-/// this function**: [`crate::config::check_claude_wiki_settings_surface`]
-/// (spec §12/§15 R-29, PR #1 Codex review iteration 3 finding 1) statically
-/// denies any wiki whose settings declare a key beyond a small allowlist
-/// (`enabledPlugins`, `permissions.{allow,deny,defaultMode}`) *before* this
-/// argv is ever built. That check exists because (a)-(c) alone are
-/// insufficient: several documented settings keys neither `hooks` nor
-/// `--tools`-shaped execute a command or widen reach directly —
-/// `apiKeyHelper`, `awsCredentialExport`, `awsAuthRefresh`, `gcpAuthRefresh`,
-/// `otelHeadersHelper`, `statusLine` (all run a configured command),
-/// `permissions.additionalDirectories` (widens read reach beyond
-/// `project_root`), and `env` (can redirect API traffic). Confirmed live: a
-/// wiki declaring `apiKeyHelper` as a command executed it even with
-/// `--settings {"disableAllHooks":true}` present
-/// (`docs/verification/llm-wikis-execution.md`, Task 15 "review loop
-/// iteration 3"). The deny check runs at both `doctor` and `query` time (not
-/// doctor only), closing the TOCTOU window between the two.
-///
-/// **Honest residual gap**: no CLI flag disables an admin-managed/
-/// enterprise-policy hook regardless of any of the above — out of this
-/// project's scope, and this project verified no managed settings exist on
-/// its own implementation machine.
-///
-/// (Earlier history, kept for context rather than deleted: R-27 additionally
-/// passed `--setting-sources user`, intending to exclude the wiki's
-/// project/local settings entirely. That broke the tool's primary load mode
-/// — Claude's project-skill discovery is itself gated on the `project`
-/// setting source — confirmed by a live four-arm experiment, R-28, "review
-/// loop iteration 2". `--setting-sources` is **not** used here.)
+/// **This argv alone is not the trust boundary — do not read it as one.**
+/// `--settings`/`--strict-mcp-config`/`--tools` bound hooks, MCP, and the
+/// built-in tool surface respectively, but several documented settings keys
+/// neither hook- nor tool-shaped still execute a command or widen reach on
+/// their own (`apiKeyHelper`, confirmed live to execute even with hooks
+/// disabled — `docs/verification/llm-wikis-execution.md` Task 15 "review
+/// loop iteration 3"). The load-bearing gate for that is
+/// [`crate::config::check_claude_wiki_settings_surface`] (spec §12/§15
+/// R-29/R-30/R-31), a **separate function**, the single source of truth,
+/// called both from static `doctor` and from `ClaudeAdapter::invoke`
+/// immediately before the child is spawned — see that call site's own
+/// comment for exactly where and why, and the function's own doc comment
+/// for the full current allowlist and its honestly-stated TOCTOU residual.
+/// This comment intentionally does not restate either, to avoid the two
+/// going out of sync the way an earlier version of this comment did (PR #1
+/// Codex review iteration 5 findings 4-6).
 pub fn build_argv(
     content_root: &Path,
     mcp_config_path: &Path,
@@ -351,6 +323,22 @@ impl ProviderAdapter for ClaudeAdapter {
             &schema,
             request.plugin_dir.as_deref(),
         );
+        // R-31 (PR #1 Codex review iteration 5 finding 3): the wiki-settings
+        // surface check is the genuinely last thing before the child is
+        // spawned -- after plugin-dir canonicalization, temp-dir/temp-file
+        // creation, and argv/schema construction, none of which need to
+        // precede it, and immediately before the one `runner.run` call that
+        // actually starts the untrusted wiki's provider process. One
+        // function, `crate::config::check_claude_wiki_settings_surface`, is
+        // the single source of truth -- also called, unchanged, from static
+        // `doctor` (`src/doctor.rs::entrypoint_check`) -- not duplicated.
+        // This is a narrowing of the check-to-spawn window to the syscall
+        // gap between this check returning and `runner.run` actually
+        // executing `Command::spawn` -- **not a closure of that window**;
+        // see the doc comment on `check_claude_wiki_settings_surface`.
+        if let Err(e) = crate::config::check_claude_wiki_settings_surface(&request.project_root) {
+            return no_child_outcome(e);
+        }
         let outcome = match runner.run(ProcessRequest {
             executable: request.executable.clone(),
             args,

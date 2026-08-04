@@ -511,30 +511,55 @@ fn try_symlink_dir(target: &Path, link: &Path) -> bool {
     }
 }
 
+/// Unlike `try_symlink_dir` above, this panics with a
+/// clear, visible reason rather than silently returning and letting the
+/// caller no-op (PR #1 Codex review iteration 5 finding 7): a settings-
+/// surface symlink-rejection test that "passes" by exercising nothing on a
+/// symlink-unprivileged host is a worse outcome than a loud, actionable
+/// failure, because these tests cover a BLOCKING security fix (iteration 4
+/// finding 2 / iteration 5 finding 2) -- a silent no-op here could let a
+/// real regression through CI undetected. Used only for those tests, not
+/// for the pre-existing, non-security-critical symlink tests elsewhere in
+/// this file, which keep their original skip-with-eprintln behavior
+/// unchanged.
 #[cfg(windows)]
-fn try_symlink_file(target: &Path, link: &Path) -> bool {
-    match std::os::windows::fs::symlink_file(target, link) {
-        Ok(()) => true,
-        Err(e) => {
-            eprintln!(
-                "SKIP: cannot create file-symlink fixture {} -> {} ({e}); Windows developer mode or an elevated privilege is required",
-                link.display(),
-                target.display()
-            );
-            false
-        }
-    }
+fn symlink_file_or_fail_loudly(target: &Path, link: &Path) {
+    std::os::windows::fs::symlink_file(target, link).unwrap_or_else(|e| {
+        panic!(
+            "cannot create file-symlink fixture {} -> {} ({e}); this test exercises a \
+             BLOCKING security fix and must not silently pass without doing so -- it \
+             requires Windows developer mode or an elevated privilege on the CI host",
+            link.display(),
+            target.display()
+        )
+    });
 }
 
 #[cfg(not(windows))]
-fn try_symlink_file(target: &Path, link: &Path) -> bool {
-    match std::os::unix::fs::symlink(target, link) {
-        Ok(()) => true,
-        Err(e) => {
-            eprintln!("SKIP: cannot create file-symlink fixture ({e})");
-            false
-        }
-    }
+fn symlink_file_or_fail_loudly(target: &Path, link: &Path) {
+    std::os::unix::fs::symlink(target, link).unwrap_or_else(|e| {
+        panic!("cannot create file-symlink fixture ({e}); this test exercises a BLOCKING security fix and must not silently pass without doing so")
+    });
+}
+
+#[cfg(windows)]
+fn symlink_dir_or_fail_loudly(target: &Path, link: &Path) {
+    std::os::windows::fs::symlink_dir(target, link).unwrap_or_else(|e| {
+        panic!(
+            "cannot create dir-symlink fixture {} -> {} ({e}); this test exercises a \
+             BLOCKING security fix and must not silently pass without doing so -- it \
+             requires Windows developer mode or an elevated privilege on the CI host",
+            link.display(),
+            target.display()
+        )
+    });
+}
+
+#[cfg(not(windows))]
+fn symlink_dir_or_fail_loudly(target: &Path, link: &Path) {
+    std::os::unix::fs::symlink(target, link).unwrap_or_else(|e| {
+        panic!("cannot create dir-symlink fixture ({e}); this test exercises a BLOCKING security fix and must not silently pass without doing so")
+    });
 }
 
 /// A minimal `WikiConfig` for path-resolution tests, which only look at
@@ -989,6 +1014,11 @@ fn a_symlinked_settings_json_is_rejected_as_unsafe_not_treated_as_absent() {
     // recursive special-entry scan (spec §6.1), so nothing else would ever
     // catch this -- the settings check itself must use symlink_metadata
     // and reject any non-regular-file entry outright.
+    //
+    // Uses `symlink_file_or_fail_loudly` (iteration 5 finding 7), not
+    // `try_symlink_file`: this test covers a BLOCKING security fix, so a
+    // symlink-unprivileged CI host must fail loudly, not silently pass
+    // having exercised nothing.
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().join("project");
     make_dir(&project.join(".claude"));
@@ -997,9 +1027,69 @@ fn a_symlinked_settings_json_is_rejected_as_unsafe_not_treated_as_absent() {
     // silently pass, exactly the bug this fix closes.
     let target = tmp.path().join("does-not-exist-yet.json");
     let link = project.join(".claude").join("settings.json");
-    if !try_symlink_file(&target, &link) {
-        return;
-    }
+    symlink_file_or_fail_loudly(&target, &link);
+    let err = check_claude_wiki_settings_surface(&project).unwrap_err();
+    assert_eq!(err.code, ErrorCode::UnsafeFilesystemEntry);
+}
+
+#[test]
+fn a_symlinked_settings_local_json_is_also_rejected_not_just_settings_json() {
+    // Iteration 5 finding 7: the prior test only covered settings.json;
+    // settings.local.json goes through the identical code path (same loop,
+    // same check) but was never independently proven.
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    make_dir(&project.join(".claude"));
+    let target = tmp.path().join("does-not-exist-yet.json");
+    let link = project.join(".claude").join("settings.local.json");
+    symlink_file_or_fail_loudly(&target, &link);
+    let err = check_claude_wiki_settings_surface(&project).unwrap_err();
+    assert_eq!(err.code, ErrorCode::UnsafeFilesystemEntry);
+}
+
+#[test]
+fn a_symlinked_claude_directory_itself_is_rejected_the_parent_bypass() {
+    // Codex review iteration 5 finding 2 (BLOCKING): `symlink_metadata` on
+    // the settings *filename* only examines the final path component. A
+    // `.claude` *directory* that is itself a symlink/junction pointing at
+    // an initially empty (or not-yet-existing) external location passes
+    // both settings files' `NotFound` branch the exact same way a
+    // dangling file-level symlink does -- after which an attacker creates
+    // the real settings file at the true target before Claude starts. The
+    // check must reject `.claude` itself, before ever looking at either
+    // filename beneath it.
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    make_dir(&project);
+    // The external target directory does not exist yet -- the sharper
+    // proof, mirroring the file-level dangling-symlink test above: even a
+    // check that tolerated "directory not found" would have to notice this
+    // is a symlink, not silently treat it as an absent `.claude`.
+    let target = tmp.path().join("external-claude-dir-does-not-exist-yet");
+    let link = project.join(".claude");
+    symlink_dir_or_fail_loudly(&target, &link);
+    let err = check_claude_wiki_settings_surface(&project).unwrap_err();
+    assert_eq!(err.code, ErrorCode::UnsafeFilesystemEntry);
+}
+
+#[test]
+fn a_symlinked_claude_directory_with_a_real_forbidden_settings_file_at_the_target_is_still_rejected_at_the_directory_level()
+ {
+    // Stronger version of the parent-bypass test: the external target
+    // directory already exists and already contains a settings file that
+    // would itself be rejected (an apiKeyHelper) if ever read -- proving
+    // the fix rejects the symlinked `.claude` directory itself, before
+    // ever reaching (or needing to reach) the file-level content check.
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    make_dir(&project);
+    let target = tmp.path().join("external-claude-dir");
+    make_file(
+        &target.join("settings.json"),
+        r#"{"apiKeyHelper":"echo hooked"}"#,
+    );
+    let link = project.join(".claude");
+    symlink_dir_or_fail_loudly(&target, &link);
     let err = check_claude_wiki_settings_surface(&project).unwrap_err();
     assert_eq!(err.code, ErrorCode::UnsafeFilesystemEntry);
 }

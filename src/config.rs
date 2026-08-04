@@ -773,6 +773,13 @@ pub fn resolve_and_check_artifact(
 /// a denylist, and why `permissions` was removed from it.
 const ALLOWED_WIKI_SETTINGS_KEYS: &[&str] = &["enabledPlugins"];
 
+/// The `CLAUDE_ENABLED_PLUGINS_DECLARED` warning text (spec §13 R-32),
+/// emitted by both `doctor` and `query` whenever a wiki's Claude settings
+/// declare `enabledPlugins` — see `check_claude_wiki_settings_surface`'s own
+/// doc comment for the full risk-acceptance evidence this warning is short
+/// for. Kept short and non-alarmist per instruction.
+pub const CLAUDE_ENABLED_PLUGINS_DECLARED_MESSAGE: &str = "This wiki's Claude settings declare enabledPlugins (project-scope plugin activation). llm-wikis admits this key because project-scope activation was observed to have no effect in headless mode on the tested Claude Code version -- not a documented guarantee. Plugin hooks remain disabled and MCP remains locked regardless.";
+
 /// Denies a Claude wiki whose `project_root/.claude/settings.json` or
 /// `settings.local.json` declares any executable or reach-widening surface
 /// (spec §6.1/§12/§15 R-29/R-30; mirrors the pre-existing `local_plugin`
@@ -793,10 +800,13 @@ const ALLOWED_WIKI_SETTINGS_KEYS: &[&str] = &["enabledPlugins"];
 /// these. Confirmed live: a wiki declaring `apiKeyHelper` as a command
 /// executed it even with `--settings {"disableAllHooks":true}` present
 /// (`docs/verification/llm-wikis-execution.md`, Task 15 "review loop
-/// iteration 3"). Any command such a key runs under `.claude/`/`.agents/`
-/// is invisible to the mutation snapshot (spec §12 excludes those
-/// directories, covered instead by `skill_fingerprint`), so detection after
-/// the fact cannot be relied on — this must be a preflight gate.
+/// iteration 3"). Any command such a key runs under `.claude/`/`.agents/` is
+/// invisible to the mutation snapshot (spec §12 excludes those directories)
+/// — and, contrary to an earlier version of this comment, **not** reliably
+/// covered by `skill_fingerprint` either: that mechanism hashes only the one
+/// configured skill/plugin directory, not the whole `.claude`/`.agents` tree
+/// (spec §12, corrected). So detection after the fact cannot be relied on —
+/// this must be a preflight gate.
 ///
 /// **`permissions` was admitted in R-29 and removed in R-30**: R-29 allowed
 /// `permissions.{allow,deny,defaultMode}` reasoning that `--tools
@@ -812,34 +822,100 @@ const ALLOWED_WIKI_SETTINGS_KEYS: &[&str] = &["enabledPlugins"];
 /// keys enumerated today; a future Claude Code release could add another
 /// executable/reach-widening setting this project has never heard of, and a
 /// denylist would silently admit it. `enabledPlugins` is the sole admitted
-/// key. It is admissible because plugins resolve from the *operator's own*
-/// user-scope marketplace configuration (`~/.claude`), which a wiki's
-/// project settings cannot add to or redirect — `enabledPlugins` only
-/// toggles on/off a plugin the operator already trusted at the user level;
-/// it cannot introduce a new, wiki-supplied plugin source. Any hooks that
-/// enabled plugin itself declares are still killed by `--settings
-/// {"disableAllHooks":true}` regardless. The real `harness-engineering`
-/// wiki has exactly `{"enabledPlugins":{"llm-wiki@llm-wiki":true}}` and
-/// resolves its entrypoint through the `project_skill` artifact regardless
-/// (R-28's live four-arm experiment) — this key carries no execution or
-/// reach-widening capability of its own, only a boolean toggle over
-/// operator-trusted state. Its *value* is still validated below (every
-/// entry must be a plain boolean) so this key cannot become a smuggling
-/// vector for some other shape in a future settings-format change.
+/// key. Any hooks a project-enabled plugin itself declares are still killed
+/// by `--settings {"disableAllHooks":true}` regardless. Its *value* is
+/// still validated below (every entry must be a plain boolean) so this key
+/// cannot become a smuggling vector for some other shape in a future
+/// settings-format change. The real `harness-engineering` wiki has exactly
+/// `{"enabledPlugins":{"llm-wiki@llm-wiki":true}}` and resolves its
+/// entrypoint through the `project_skill` artifact regardless (R-28's live
+/// four-arm experiment).
 ///
-/// A missing settings file is not an error (most wikis have none). A
+/// **`enabledPlugins` — explicit risk acceptance with evidence, not a safety
+/// guarantee (R-32)**: official plugin-component-type documentation lists
+/// Skills, Agents, Hooks, MCP servers, LSP servers, Monitors, Themes,
+/// Workflows, Output styles, Channels, and a `bin/` directory. Monitors are
+/// documented as interactive-only ("run only in interactive CLI sessions").
+/// **LSP servers are documented as auto-starting subprocesses with no
+/// documented interactive-only restriction** — the component this key could
+/// theoretically reach if project-scope activation were honored in headless
+/// mode. `enabledPlugins` itself *is* documented as honored from project and
+/// local scope (unlike `permissions.allow`/`additionalDirectories`, which
+/// are documented to fail closed under `-p`), and a plugin's own settings
+/// can only carry `agent`/`subagentStatusLine` — a plugin cannot use it to
+/// contribute `additionalDirectories` or a new marketplace source; that path
+/// is interactive/consent-gated. An empirical test (Claude Code 2.1.221,
+/// this project's exact argv, cwd = a fixture wiki) declared a plugin that
+/// **is installed but not user-scope-enabled** via project-scope
+/// `enabledPlugins`; the `system/init` event's loaded-plugin count matched
+/// only the pre-existing user-scope-enabled set, and the declared plugin was
+/// absent, with `plugin_errors: null` — project-scope activation was
+/// observed to have **no effect** in headless mode on that version. This is
+/// an empirical observation on one CLI version, **not a documented
+/// contract**: a future Claude Code release could start honoring
+/// project-scope activation, at which point this admission must be
+/// revisited. `check_claude_wiki_settings_surface`'s callers (`doctor`,
+/// `query`) surface `CLAUDE_ENABLED_PLUGINS_DECLARED` — a warning, not a
+/// failure — whenever a wiki's settings declare this key, so an operator is
+/// told plainly rather than the risk being silent.
+///
+/// A missing settings file is not an error (most wikis have none, and a
+/// missing `.claude` directory itself short-circuits both files at once). A
 /// present-but-unparseable-as-a-JSON-object file fails closed rather than
 /// being silently skipped, since this project cannot verify it is safe. A
-/// settings path that is a symlink, junction, reparse point, directory, or
-/// any other non-regular-file entry is rejected as `UNSAFE_FILESYSTEM_ENTRY`
-/// rather than treated as absent — a dangling symlink resolves as "not
-/// found" under a plain existence check, letting its target be created
-/// *after* this check passes and *before* the provider reads it; `.claude/`
-/// is excluded from the recursive special-entry scan elsewhere (spec §6.1),
-/// so nothing else would ever catch this.
-pub fn check_claude_wiki_settings_surface(project_root: &Path) -> Result<(), AppError> {
+/// settings path — **or the `.claude` directory itself** (R-31; see the
+/// function body) — that is a symlink, junction, reparse point, directory-
+/// where-a-file-was-expected, or any other non-regular entry is rejected as
+/// `UNSAFE_FILESYSTEM_ENTRY` rather than treated as absent. A dangling
+/// symlink at either level resolves as "not found" under a plain existence
+/// check, letting its target be created *after* this check passes and
+/// *before* the provider reads it; `.claude/` is excluded from the
+/// recursive special-entry scan elsewhere (spec §6.1), so nothing else would
+/// ever catch this. **Call site (R-31, PR #1 Codex review iteration 5
+/// finding 3)**: this function is called from both static `doctor`
+/// (`src/doctor.rs::entrypoint_check`) and `ClaudeAdapter::invoke`
+/// (`src/providers/claude.rs`), the latter immediately before the one
+/// `runner.run` call that spawns the real provider process — the genuinely
+/// last check before the syscall, not merely "before some earlier step." The
+/// residual check-to-spawn window is the syscall gap between this function
+/// returning and `Command::spawn` actually executing; it is narrowed to
+/// that, **not eliminated** — see `ClaudeAdapter::invoke`'s own comment.
+pub fn check_claude_wiki_settings_surface(project_root: &Path) -> Result<bool, AppError> {
+    // R-31: `symlink_metadata` on the settings *file* only examines the
+    // final path component. A `.claude` *directory* that is itself a
+    // symlink/junction pointing at an initially empty (or not-yet-existing)
+    // external location passes both files' `NotFound` branch here, after
+    // which an attacker creates the settings file at the real target before
+    // Claude starts -- this wrapper never re-checks after that point.
+    // `project_root` itself is already canonicalized/containment-checked by
+    // the caller before this function ever runs; `.claude` is the one
+    // unchecked path component this function itself introduces, so it must
+    // be checked the same way the settings files are. There is no other
+    // intermediate component between `project_root` and the two settings
+    // filenames (`.claude/<name>` is exactly two components deep).
+    let claude_dir = project_root.join(".claude");
+    let claude_dir_md = match fs::symlink_metadata(&claude_dir) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => {
+            return Err(entrypoint_invalid(format!(
+                "wiki .claude directory could not be read: {e}"
+            )));
+        }
+    };
+    if is_special_entry(&claude_dir_md) {
+        return Err(AppError::new(
+            ErrorCode::UnsafeFilesystemEntry,
+            "wiki .claude directory is a symlink, junction, reparse point, or mount point",
+        ));
+    }
+    if !claude_dir_md.is_dir() {
+        return Err(entrypoint_invalid("wiki .claude is not a directory"));
+    }
+
+    let mut declares_enabled_plugins = false;
     for name in ["settings.json", "settings.local.json"] {
-        let path = project_root.join(".claude").join(name);
+        let path = claude_dir.join(name);
         let md = match fs::symlink_metadata(&path) {
             Ok(m) => m,
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
@@ -894,9 +970,10 @@ pub fn check_claude_wiki_settings_surface(project_root: &Path) -> Result<(), App
                     )));
                 }
             }
+            declares_enabled_plugins = true;
         }
     }
-    Ok(())
+    Ok(declares_enabled_plugins)
 }
 
 // ---------------------------------------------------------------------------

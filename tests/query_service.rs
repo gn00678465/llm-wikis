@@ -5,6 +5,7 @@
 //! model quota is spent.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -541,15 +542,21 @@ fn validate_before_spawn() {
 
 #[test]
 fn query_rejects_a_forbidden_claude_wiki_settings_key_before_any_spawn() {
-    // R-30: the check now runs as late as possible -- immediately before
-    // `invoke` (Step 11), after the version/auth probes (Step 7) and the
-    // fingerprint gate (Step 8), narrowing the check-to-spawn window rather
-    // than checking early and leaving a wide gap. So this fixture queues
-    // exactly the version+auth probe responses (a real spawn, deliberately
-    // allowed) and seeds a matching probe record (so the fingerprint gate
-    // itself passes), then leaves *zero* responses queued beyond that --
-    // proving the settings check aborts strictly before `invoke`'s own
-    // spawn attempt, which would otherwise panic on the empty queue.
+    // R-31 (PR #1 Codex review iteration 5 finding 8): the check now runs
+    // inside `ClaudeAdapter::invoke`, the genuinely last thing before the
+    // one `runner.run` call that spawns the real provider process -- after
+    // the version/auth probes (Step 7) and the fingerprint gate (Step 8),
+    // both of which also call the runner. A prior version of this test only
+    // proved "before *some* spawn," which an accidental move of the check
+    // back to an earlier step would not have caught (the version/auth
+    // probes would simply go uncalled/unconsumed and nothing here would
+    // notice). This version uses a `SharedRunner` so the captured-request
+    // list is inspectable *after* `query()` returns, and asserts on it
+    // directly: exactly the two probe requests (`--version`, then `auth
+    // status --json`) were captured, in that order, proving the probes
+    // genuinely ran -- and nothing else was, proving `invoke`'s own
+    // `runner.run` (which would be a third, `--add-dir`-shaped request) was
+    // never reached.
     let fixture = build_fixture();
     fs::write(
         fixture.project_root.join(".claude/settings.json"),
@@ -557,11 +564,12 @@ fn query_rejects_a_forbidden_claude_wiki_settings_key_before_any_spawn() {
     )
     .unwrap();
     let config = build_config(&fixture, Agent::Claude);
-    let runner = FakeProcessRunner::new();
-    queue_success_probes(&runner, Agent::Claude);
+    let inner = Arc::new(FakeProcessRunner::new());
+    queue_success_probes(&inner, Agent::Claude);
     let probes = FakeProbeReader::new();
     seed_matching_probe(&probes, &fixture, &config, Agent::Claude);
-    let service = QueryService::new(runner, probes);
+    let handle = Arc::clone(&inner);
+    let service = QueryService::new(SharedRunner(inner), probes);
     let request = build_request(
         &fixture,
         config,
@@ -574,6 +582,22 @@ fn query_rejects_a_forbidden_claude_wiki_settings_key_before_any_spawn() {
 
     assert!(!envelope.ok);
     assert_eq!(envelope.error.unwrap().code, ErrorCode::EntrypointInvalid);
+
+    let captured = handle.captured_requests();
+    assert_eq!(
+        captured.len(),
+        2,
+        "expected exactly the version+auth probes to have run, nothing more: {captured:?}"
+    );
+    assert_eq!(captured[0].args, vec![OsString::from("--version")]);
+    assert_eq!(
+        captured[1].args,
+        vec![
+            OsString::from("auth"),
+            OsString::from("status"),
+            OsString::from("--json"),
+        ]
+    );
     assert_eq!(envelope.child_exit_code, None);
 }
 
@@ -607,6 +631,16 @@ fn query_still_succeeds_when_wiki_settings_declare_only_enabled_plugins() {
         .expect("Ok envelope");
 
     assert!(envelope.ok, "expected success, got {envelope:?}");
+    // R-32: enabledPlugins is admitted but not silent -- the wrapper
+    // surfaces CLAUDE_ENABLED_PLUGINS_DECLARED so an operator is told.
+    assert!(
+        envelope
+            .warnings
+            .iter()
+            .any(|w| w.code == "CLAUDE_ENABLED_PLUGINS_DECLARED"),
+        "expected the enabledPlugins advisory warning, got {:?}",
+        envelope.warnings
+    );
 }
 
 // ---------------------------------------------------------------------------
