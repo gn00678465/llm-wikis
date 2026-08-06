@@ -33,18 +33,18 @@ irm https://raw.githubusercontent.com/gn00678465/llm-wikis/refs/heads/main/insta
 ```
 
 Both scripts install the **latest** published release by default. Set
-`LLM_WIKIS_VERSION` (an exact tag, e.g. `v0.1.0`) before running either
+`LLM_WIKIS_VERSION` (an exact tag, e.g. `v0.1.0-beta`) before running either
 script to install a specific version instead — this pins, upgrades, or
 downgrades in place:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gn00678465/llm-wikis/refs/heads/main/install.sh | LLM_WIKIS_VERSION=v0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/gn00678465/llm-wikis/refs/heads/main/install.sh | LLM_WIKIS_VERSION=v0.1.0-beta sh
 ```
 
-(The variable must be scoped to `sh` — the process that actually reads it — not to `curl`. `LLM_WIKIS_VERSION=v0.1.0 curl ... | sh` sets the variable only for `curl`'s environment and never reaches the piped `sh`.)
+(The variable must be scoped to `sh` — the process that actually reads it — not to `curl`. `LLM_WIKIS_VERSION=v0.1.0-beta curl ... | sh` sets the variable only for `curl`'s environment and never reaches the piped `sh`.)
 
 ```powershell
-$env:LLM_WIKIS_VERSION = "v0.1.0"
+$env:LLM_WIKIS_VERSION = "v0.1.0-beta"
 irm https://raw.githubusercontent.com/gn00678465/llm-wikis/refs/heads/main/install.ps1 | iex
 ```
 
@@ -381,7 +381,7 @@ llm-wikis [--config <absolute-path>] [--json] doctor [--wiki <id>] [--agent clau
 llm-wikis [--config <absolute-path>] [--json] query --wiki <id> [--agent claude|codex] -- <question>
 ```
 
-`--version` prints `llm-wikis 0.1.0`. `list` loads the registry and lists
+`--version` prints `llm-wikis 0.1.0-beta`. `list` loads the registry and lists
 every configured wiki **without starting a provider** — no model call, no
 live check. `doctor` without `--wiki`/`--agent` runs static checks (§3.7)
 for every configured wiki/provider pair; either selector narrows the
