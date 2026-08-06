@@ -327,6 +327,25 @@ case "$STDOUT_TEXT" in
   *) fail "re-running pinned back to v1.0.0 stdout ($STDOUT_TEXT)" ;;
 esac
 
+echo "=== defect-2b: unpinned 'latest' install fails with a clear, actionable message when no stable release exists ==="
+# Separate, empty fixture root -- no 'latest/download' directory at all --
+# so the download 404s exactly like a real repository with only
+# pre-releases published (GitHub's releases/latest/download/... deliberately
+# skips pre-releases).
+NO_LATEST_ROOT="${WORK}/no-latest-fixture"
+mkdir -p "$NO_LATEST_ROOT"
+NO_LATEST_BASE_URL="file://${NO_LATEST_ROOT}"
+homeNL="$(new_sandbox_home)"; dirNL="$(new_sandbox_install_dir)"
+run_installer LLM_WIKIS_INSTALLER_TEST=1 LLM_WIKIS_TEST_BASE_URL="$NO_LATEST_BASE_URL" \
+  LLM_WIKIS_TEST_HOME="$homeNL" LLM_WIKIS_TEST_INSTALL_DIR="$dirNL" \
+  LLM_WIKIS_TEST_OS=Linux LLM_WIKIS_TEST_ARCH=x86_64 SHELL=/bin/bash HOME="$homeNL"
+[ "$EXIT_CODE" != "0" ] && pass "unpinned install against a repository with no stable release exits non-zero" || fail "unpinned install against a repository with no stable release exits non-zero"
+case "$STDERR_TEXT" in
+  *"no stable release published yet"*) pass "unpinned install against a repository with no stable release prints the explicit actionable error, not a bare download failure" ;;
+  *) fail "no-stable-release error text ($STDERR_TEXT)" ;;
+esac
+[ ! -e "${dirNL}/llm-wikis" ] && pass "unpinned install against a repository with no stable release places no binary" || fail "unpinned install against a repository with no stable release placed a binary"
+
 echo ""
 echo "=== Summary: ${PASS_COUNT} passed, ${FAIL_COUNT} failed ==="
 if [ -n "$SKIP_NOTES" ]; then

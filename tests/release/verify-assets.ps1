@@ -5,9 +5,22 @@
 
 .DESCRIPTION
     Specification §18.1; plan Task 14 Step 7: SHA256SUMS must list exactly
-    five entries -- the three platform binaries plus both installers, never
-    the manifest itself -- with no missing, duplicate, or unexpected entries,
-    and every listed hash must match the actual file in the directory.
+    three entries -- the three platform binaries, never the manifest itself
+    -- with no missing, duplicate, or unexpected entries, and every listed
+    hash must match the actual file in the directory.
+
+    The two installer scripts (install.sh, install.ps1) are deliberately NOT
+    part of the release asset set: install.sh's unpinned (LLM_WIKIS_VERSION
+    unset) run always resolves against .../releases/latest/download/..., so
+    an installer copy attached to one specific tagged release would silently
+    install `latest` instead of that release while looking self-contained --
+    the release-provided SHA256SUMS entry for the installer would give no
+    real integrity guarantee either, since the same release controls both
+    the script and its own checksum. Both installers are fetched from
+    raw.githubusercontent.com/.../refs/heads/main/ instead (see README.md /
+    docs/llm-wikis.md), which is the single source of truth for them. This
+    script FAILS if either installer script shows up in the asset set at
+    all.
 
     Runnable standalone against any asset directory (a real release
     download, or a synthetic local fixture) with no network access.
@@ -42,14 +55,13 @@ if (-not (Test-Path -LiteralPath $sumsPath -PathType Leaf)) {
 $expectedNames = @(
     'llm-wikis-windows-amd64.exe',
     'llm-wikis-linux-amd64',
-    'llm-wikis-darwin-arm64',
-    'install.sh',
-    'install.ps1'
+    'llm-wikis-darwin-arm64'
 )
+$forbiddenInstallerNames = @('install.sh', 'install.ps1')
 
 $lines = @(Get-Content -LiteralPath $sumsPath | Where-Object { $_.Trim() -ne '' })
-if ($lines.Count -ne 5) {
-    Fail "SHA256SUMS has $($lines.Count) entries, expected exactly 5"
+if ($lines.Count -ne 3) {
+    Fail "SHA256SUMS has $($lines.Count) entries, expected exactly 3"
 }
 
 $entries = [ordered]@{}
@@ -65,6 +77,9 @@ foreach ($line in $lines) {
     }
     if ($entries.Contains($rawName)) {
         Fail "duplicate filename in SHA256SUMS: $rawName"
+    }
+    if ($forbiddenInstallerNames -contains $rawName) {
+        Fail "installer script must not be part of the release asset set: $rawName"
     }
     $entries[$rawName] = $hash
 }
@@ -85,6 +100,15 @@ foreach ($name in $entries.Keys) {
     }
 }
 
+# Belt-and-braces: reject an installer script sitting in the asset directory
+# even if it were somehow never listed in SHA256SUMS at all.
+foreach ($name in $forbiddenInstallerNames) {
+    $installerPath = Join-Path $AssetDirectory $name
+    if (Test-Path -LiteralPath $installerPath -PathType Leaf) {
+        Fail "installer script must not be part of the release asset directory: $name"
+    }
+}
+
 foreach ($name in $entries.Keys) {
     $assetPath = Join-Path $AssetDirectory $name
     $actual = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -94,8 +118,8 @@ foreach ($name in $entries.Keys) {
 }
 
 $fileCount = (Get-ChildItem -LiteralPath $AssetDirectory -File).Count
-if ($fileCount -ne 6) {
-    Fail "asset directory contains $fileCount files, expected exactly 6 (5 assets + SHA256SUMS)"
+if ($fileCount -ne 4) {
+    Fail "asset directory contains $fileCount files, expected exactly 4 (3 assets + SHA256SUMS)"
 }
 
-Write-Host "PASS: SHA256SUMS in $AssetDirectory has exactly the 5 expected entries, all hashes match"
+Write-Host "PASS: SHA256SUMS in $AssetDirectory has exactly the 3 expected entries, all hashes match"

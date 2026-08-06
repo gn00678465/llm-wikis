@@ -1,9 +1,20 @@
 #!/bin/sh
 # Verifies a release asset directory's SHA256SUMS manifest (specification
-# §18.1; plan Task 14 Step 7): exactly five entries -- the three platform
-# binaries plus both installers, never the manifest itself -- no missing,
-# duplicate, or unexpected entries, and every listed hash matches the actual
-# file in the directory.
+# §18.1; plan Task 14 Step 7): exactly three entries -- the three platform
+# binaries, never the manifest itself -- no missing, duplicate, or unexpected
+# entries, and every listed hash matches the actual file in the directory.
+#
+# The two installer scripts (install.sh, install.ps1) are deliberately NOT
+# part of the release asset set: install.sh's unpinned (LLM_WIKIS_VERSION
+# unset) run always resolves against .../releases/latest/download/..., so an
+# installer copy attached to one specific tagged release would silently
+# install `latest` instead of that release while looking self-contained --
+# the release-provided SHA256SUMS entry for the installer would give no real
+# integrity guarantee either, since the same release controls both the
+# script and its own checksum. Both installers are fetched from
+# raw.githubusercontent.com/.../refs/heads/main/ instead (see README.md /
+# docs/llm-wikis.md), which is the single source of truth for them. This
+# script FAILS if either installer script shows up in the asset set at all.
 #
 # Usage: sh tests/release/verify-assets.sh <asset-directory>
 #
@@ -33,12 +44,10 @@ fi
 
 EXPECTED_NAMES="llm-wikis-windows-amd64.exe
 llm-wikis-linux-amd64
-llm-wikis-darwin-arm64
-install.sh
-install.ps1"
+llm-wikis-darwin-arm64"
 
 LINE_COUNT=$(grep -c . "$SUMS" || true)
-[ "$LINE_COUNT" = "5" ] || fail "SHA256SUMS has $LINE_COUNT entries, expected exactly 5"
+[ "$LINE_COUNT" = "3" ] || fail "SHA256SUMS has $LINE_COUNT entries, expected exactly 3"
 
 # Binary-mode ("*"-prefixed) entries would silently break install.sh's own
 # `awk '$2==f'` exact-match lookup -- reject the manifest outright if found.
@@ -59,9 +68,16 @@ done
 
 for name in $NAMES_IN_SUMS; do
   case "$name" in
-    llm-wikis-windows-amd64.exe | llm-wikis-linux-amd64 | llm-wikis-darwin-arm64 | install.sh | install.ps1) : ;;
+    llm-wikis-windows-amd64.exe | llm-wikis-linux-amd64 | llm-wikis-darwin-arm64) : ;;
+    install.sh | install.ps1) fail "installer script must not be part of the release asset set: $name" ;;
     *) fail "unexpected entry in SHA256SUMS: $name" ;;
   esac
+done
+
+# Belt-and-braces: reject an installer script sitting in the asset directory
+# even if it were somehow never listed in SHA256SUMS at all.
+for name in install.sh install.ps1; do
+  [ -f "${DIR}/${name}" ] && fail "installer script must not be part of the release asset directory: $name"
 done
 
 while read -r expected_hash file_name; do
@@ -71,6 +87,6 @@ while read -r expected_hash file_name; do
 done < "$SUMS"
 
 FILE_COUNT=$(find "$DIR" -maxdepth 1 -type f | wc -l | tr -d ' ')
-[ "$FILE_COUNT" = "6" ] || fail "asset directory contains $FILE_COUNT files, expected exactly 6 (5 assets + SHA256SUMS)"
+[ "$FILE_COUNT" = "4" ] || fail "asset directory contains $FILE_COUNT files, expected exactly 4 (3 assets + SHA256SUMS)"
 
-echo "PASS: SHA256SUMS in $DIR has exactly the 5 expected entries, all hashes match"
+echo "PASS: SHA256SUMS in $DIR has exactly the 3 expected entries, all hashes match"
