@@ -179,6 +179,36 @@ impl Default for RuntimeConfig {
     }
 }
 
+impl RuntimeConfig {
+    /// spec §6: "`max_question_bytes`, `max_stdout_bytes`, and
+    /// `max_stderr_bytes` are positive byte counts." A zero value for any of
+    /// the three is rejected at config-load time rather than silently
+    /// accepted and left to degrade into a per-query `QUESTION_TOO_LARGE`/
+    /// `OUTPUT_TOO_LARGE` later (checklist row OFF-044). `u64` cannot
+    /// represent a negative value, so "positive" here means "non-zero."
+    /// `timeout_seconds` is deliberately not checked here: spec §6 names only
+    /// the three byte-cap fields as "positive byte counts" and is silent on
+    /// `timeout_seconds`.
+    fn validate(&self) -> Result<(), AppError> {
+        if self.max_question_bytes == 0 {
+            return Err(config_invalid(
+                "runtime.max_question_bytes must be a positive byte count",
+            ));
+        }
+        if self.max_stdout_bytes == 0 {
+            return Err(config_invalid(
+                "runtime.max_stdout_bytes must be a positive byte count",
+            ));
+        }
+        if self.max_stderr_bytes == 0 {
+            return Err(config_invalid(
+                "runtime.max_stderr_bytes must be a positive byte count",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// `[providers.<agent>]` (spec §6). Table is optional per provider.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -359,6 +389,7 @@ impl Config {
         if self.config_version != 1 {
             return Err(config_invalid("config_version must equal 1"));
         }
+        self.runtime.validate()?;
         if let Some(ProviderConfig {
             executable: Some(exe),
         }) = &self.providers.claude

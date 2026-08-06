@@ -4,5 +4,5 @@ fn version_is_public_product_name_and_package_version() {
     cmd.arg("--version")
         .assert()
         .success()
-        .stdout("llm-wikis 0.1.0\n");
+        .stdout("llm-wikis 0.1.0-beta\n");
 }

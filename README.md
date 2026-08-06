@@ -24,6 +24,14 @@ The macOS binary is an unsigned preview — see `docs/llm-wikis.md` for the
 Gatekeeper approval flow. The Windows binary is unsigned too, so SmartScreen
 may warn on first run.
 
+**Verification status:** all three platforms above have verified native
+binary + installer coverage (CI builds, smoke-tests, and installs on each).
+Live end-to-end provider queries (`llm-wikis query` actually talking to
+Claude Code or Codex CLI and returning a grounded answer) have been verified
+on Windows only, for both providers. The equivalent Linux/WSL and macOS live
+query paths are unverified, not known-broken — they simply haven't been run
+on those platforms yet.
+
 ## Install
 
 **Linux / macOS:**
