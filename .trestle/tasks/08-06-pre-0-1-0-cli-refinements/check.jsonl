@@ -1,0 +1,5 @@
+{"reason":"seed row — add real entries via: task.ts add-context <name> <implement|check> <file> <reason>"}
+{"file":"tests/cli_contract.rs","reason":"CLI surface contract: new subcommands, stderr error lines, spinner absence in non-TTY"}
+{"file":"tests/claude_adapter.rs","reason":"asserts the exact Claude argv vector — must cover the two new flags"}
+{"file":"tests/codex_adapter.rs","reason":"asserts the exact Codex argv vector — must cover developer_instructions"}
+{"file":"tests/spec_drift.rs","reason":"guards code-vs-spec consistency; run it to prove spec updates landed"}
