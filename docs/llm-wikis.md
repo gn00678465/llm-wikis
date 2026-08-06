@@ -8,6 +8,14 @@ installation, configuration, and the query/security contract. For the formal
 specification, see
 [`docs/2026-07-28-llm-wikis-external-query-design.md`](2026-07-28-llm-wikis-external-query-design.md).
 
+**Verification status.** Native binary and installer support is verified on
+all three published platforms (Windows, Linux/WSL, macOS Apple Silicon) via
+the CI build/test/install matrix. Live end-to-end provider queries — this
+CLI actually invoking Claude Code or Codex CLI against a real wiki and
+returning a grounded answer — have been verified on Windows only, for both
+providers. Linux/WSL and macOS live query paths are unverified rather than
+known-broken: they simply have not been exercised on those platforms yet.
+
 ## 1. Installation
 
 ### 1.1 Latest and pinned installs
