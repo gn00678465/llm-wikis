@@ -391,6 +391,50 @@ fn runtime_each_field_independently_defaults_when_others_are_set() {
     assert_eq!(cfg2.runtime.max_stderr_bytes, 65536);
 }
 
+/// spec §6: "`max_question_bytes`, `max_stdout_bytes`, and `max_stderr_bytes`
+/// are positive byte counts." A zero value for any of the three is a
+/// misconfiguration (a zero cap makes the tool unusable) and must be rejected
+/// as `CONFIG_INVALID` at config-load time, not silently accepted and left to
+/// degrade into a per-query `QUESTION_TOO_LARGE`/`OUTPUT_TOO_LARGE` later
+/// (checklist row OFF-044).
+#[test]
+fn positive_byte_counts_rejects_zero_max_question_bytes() {
+    let text = format!("{BASE_HEADER}\n[runtime]\nmax_question_bytes = 0\n");
+    assert!(matches!(
+        Config::load_str(&text),
+        Err(e) if e.code == ErrorCode::ConfigInvalid
+    ));
+}
+
+#[test]
+fn positive_byte_counts_rejects_zero_max_stdout_bytes() {
+    let text = format!("{BASE_HEADER}\n[runtime]\nmax_stdout_bytes = 0\n");
+    assert!(matches!(
+        Config::load_str(&text),
+        Err(e) if e.code == ErrorCode::ConfigInvalid
+    ));
+}
+
+#[test]
+fn positive_byte_counts_rejects_zero_max_stderr_bytes() {
+    let text = format!("{BASE_HEADER}\n[runtime]\nmax_stderr_bytes = 0\n");
+    assert!(matches!(
+        Config::load_str(&text),
+        Err(e) if e.code == ErrorCode::ConfigInvalid
+    ));
+}
+
+#[test]
+fn positive_byte_counts_accepts_the_documented_defaults() {
+    // Sanity check that the fix does not reject the spec's own §6 example
+    // values (timeout_seconds is intentionally out of scope here: spec §6
+    // calls out only the three byte-cap fields as "positive byte counts").
+    let cfg = Config::load_str(BASE_HEADER).unwrap();
+    assert_eq!(cfg.runtime.max_question_bytes, 65536);
+    assert_eq!(cfg.runtime.max_stdout_bytes, 1_048_576);
+    assert_eq!(cfg.runtime.max_stderr_bytes, 65536);
+}
+
 // ---------------------------------------------------------------------------
 // Step 3: query_prompt constraints (spec §6.4)
 // ---------------------------------------------------------------------------
