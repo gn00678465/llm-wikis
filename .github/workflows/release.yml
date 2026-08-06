@@ -115,8 +115,6 @@ jobs:
           pattern: release-asset-*
           path: assets
           merge-multiple: true
-      - name: Add the two installer scripts to the asset set
-        run: cp install.sh install.ps1 assets/
       - name: Generate SHA256SUMS
         working-directory: assets
         run: |
@@ -128,7 +126,11 @@ jobs:
           # exact match against $2, so a `*`-prefixed entry would silently
           # never match and every install.sh run would fail closed with "no
           # checksum entry for <asset>".
-          sha256sum llm-wikis-windows-amd64.exe llm-wikis-linux-amd64 llm-wikis-darwin-arm64 install.sh install.ps1 > SHA256SUMS
+          #
+          # The two installer scripts are deliberately NOT part of the asset
+          # set -- see the "Self-verify" step below and
+          # tests/release/verify-assets.sh's header comment for why.
+          sha256sum llm-wikis-windows-amd64.exe llm-wikis-linux-amd64 llm-wikis-darwin-arm64 > SHA256SUMS
           cat SHA256SUMS
       - name: Self-verify the manifest (tests/release/verify-assets.sh)
         run: sh tests/release/verify-assets.sh assets
@@ -139,8 +141,6 @@ jobs:
             assets/llm-wikis-windows-amd64.exe
             assets/llm-wikis-linux-amd64
             assets/llm-wikis-darwin-arm64
-            assets/install.sh
-            assets/install.ps1
             assets/SHA256SUMS
           if-no-files-found: error
 
@@ -185,12 +185,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
+          # Mark as a GitHub pre-release iff the tag carries a pre-release
+          # identifier (a `-` after the version core, e.g. `v0.1.0-beta`),
+          # never for a plain `vX.Y.Z` tag. This matters because GitHub's
+          # `/releases/latest/download/...` -- what both installers use by
+          # default (LLM_WIKIS_VERSION unset) -- deliberately skips
+          # pre-releases; only a non-prerelease tag ever becomes "latest".
+          PRERELEASE_FLAG=""
+          case "${GITHUB_REF_NAME}" in
+            v*-*) PRERELEASE_FLAG="--prerelease" ;;
+          esac
+          # $PRERELEASE_FLAG is deliberately unquoted below: empty expands to
+          # zero arguments, "--prerelease" expands to exactly one.
           gh release create "${GITHUB_REF_NAME}" \
             assets/llm-wikis-windows-amd64.exe \
             assets/llm-wikis-linux-amd64 \
             assets/llm-wikis-darwin-arm64 \
-            assets/install.ps1 \
-            assets/install.sh \
             assets/SHA256SUMS \
             --title "${GITHUB_REF_NAME}" \
-            --generate-notes
+            --generate-notes \
+            $PRERELEASE_FLAG

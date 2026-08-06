@@ -74,9 +74,25 @@ fi
 ASSET_PATH="${TMP_DIR}/${ASSET}"
 SUMS_PATH="${TMP_DIR}/SHA256SUMS"
 
+# GitHub's .../releases/latest/download/... deliberately skips pre-releases,
+# so an unpinned run 404s whenever only pre-releases have been published
+# (e.g. during a beta-only period). Rather than a bare curl failure, tell the
+# operator exactly what to do about it -- no GitHub API call here, since that
+# would add unauthenticated rate limits and fragile JSON parsing for what is
+# otherwise a plain POSIX-sh script.
+NO_STABLE_RELEASE_MSG="no stable release published yet -- set LLM_WIKIS_VERSION to a specific tag (see https://github.com/${REPO}/releases)"
+
+fail_download() {
+  if [ -z "$VERSION" ]; then
+    err "$NO_STABLE_RELEASE_MSG"
+  else
+    err "download failed: $1"
+  fi
+}
+
 info "Downloading ${ASSET}..."
-curl -fsSL -o "$ASSET_PATH" "${DOWNLOAD_BASE}/${ASSET}" || err "download failed: ${ASSET}"
-curl -fsSL -o "$SUMS_PATH" "${DOWNLOAD_BASE}/SHA256SUMS" || err "download failed: SHA256SUMS"
+curl -fsSL -o "$ASSET_PATH" "${DOWNLOAD_BASE}/${ASSET}" || fail_download "${ASSET}"
+curl -fsSL -o "$SUMS_PATH" "${DOWNLOAD_BASE}/SHA256SUMS" || fail_download "SHA256SUMS"
 
 if command -v sha256sum >/dev/null 2>&1; then
   HASH_OF() { sha256sum "$1" | awk '{print $1}'; }

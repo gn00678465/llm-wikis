@@ -297,6 +297,55 @@ try {
     $rA2 = Invoke-Installer -EnvOverrides $envA
     Assert-True ($rA2.ExitCode -eq 0 -and (Get-InstalledHash $sb) -eq $hashV1) "re-running pinned back to v1.0.0 downgrades in place: installed binary matches the v1.0.0 fixture hash again"
 
+    Write-Host "=== defect-2b: unpinned 'latest' install fails with a clear, actionable message when no stable release exists ==="
+    # Separate loopback server bound to an empty directory -- no 'latest'
+    # release published at all -- so /latest/download/... 404s exactly like
+    # a real repository with only pre-releases published (GitHub's
+    # releases/latest/download/... deliberately skips pre-releases).
+    $NoLatestRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("llm-wikis-verify-nolatest-" + [System.Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $NoLatestRoot -Force | Out-Null
+    $NoLatestPort = Get-Random -Minimum 20000 -Maximum 60000
+    $NoLatestListener = New-Object System.Net.HttpListener
+    $NoLatestListener.Prefixes.Add("http://127.0.0.1:$NoLatestPort/")
+    $NoLatestListener.Start()
+    $NoLatestJob = Start-ThreadJob -ScriptBlock {
+        param($Listener)
+        while ($Listener.IsListening) {
+            try {
+                $context = $Listener.GetContext()
+            } catch {
+                break
+            }
+            try {
+                $context.Response.StatusCode = 404
+            } catch {
+            } finally {
+                $context.Response.OutputStream.Close()
+            }
+        }
+    } -ArgumentList $NoLatestListener
+    Start-Sleep -Milliseconds 200
+    try {
+        $sb = New-Sandbox
+        $envNoLatest = @{
+            LLM_WIKIS_INSTALLER_TEST    = '1'
+            LLM_WIKIS_TEST_BASE_URL     = "http://127.0.0.1:$NoLatestPort"
+            LLM_WIKIS_TEST_INSTALL_ROOT = $sb.InstallRoot
+            LLM_WIKIS_TEST_PATH_FILE    = $sb.PathFile
+            LLM_WIKIS_TEST_ARCH         = 'AMD64'
+        }
+        $r = Invoke-Installer -EnvOverrides $envNoLatest
+        Assert-True ($r.ExitCode -ne 0) "unpinned install against a repository with no stable release exits non-zero"
+        Assert-True ($r.StdErr -match 'no stable release published yet') "unpinned install against a repository with no stable release prints the explicit actionable error, not a bare download failure"
+        Assert-True (-not (Test-Path -LiteralPath $sb.BinaryPath)) "unpinned install against a repository with no stable release places no binary"
+    } finally {
+        try { $NoLatestListener.Stop() } catch {}
+        try { $NoLatestListener.Close() } catch {}
+        Wait-Job -Job $NoLatestJob -Timeout 5 | Out-Null
+        Remove-Job -Job $NoLatestJob -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $NoLatestRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     Write-Host "=== INST-10 (missing checksum tool): not applicable to install.ps1 ==="
     Skip-Row "INST-10 missing-checksum-tool case" "Get-FileHash is a built-in PowerShell cmdlet, not an external tool that can be absent the way sha256sum/shasum can on POSIX; this row is scoped to install.sh only (platform column: Linux/WSL, macOS)."
 

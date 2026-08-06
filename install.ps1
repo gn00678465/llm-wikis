@@ -63,6 +63,13 @@ if ($Version) {
     $DownloadBase = "$BaseUrl/latest/download"
 }
 
+# GitHub's .../releases/latest/download/... deliberately skips pre-releases,
+# so an unpinned run 404s whenever only pre-releases have been published
+# (e.g. during a beta-only period). Rather than a bare download failure,
+# tell the operator exactly what to do about it -- no GitHub API call here,
+# since that would add unauthenticated rate limits and fragile JSON parsing.
+$NoStableReleaseMsg = "no stable release published yet -- set LLM_WIKIS_VERSION to a specific tag (see https://github.com/$Repo/releases)"
+
 $TmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ("llm-wikis-install-" + [System.Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $TmpDir -Force | Out-Null
 
@@ -75,7 +82,11 @@ try {
         Invoke-WebRequest -Uri "$DownloadBase/$Asset" -OutFile $AssetPath -UseBasicParsing
         Invoke-WebRequest -Uri "$DownloadBase/SHA256SUMS" -OutFile $ChecksumPath -UseBasicParsing
     } catch {
-        Invoke-Fail "download failed: $($_.Exception.Message)"
+        if (-not $Version) {
+            Invoke-Fail $NoStableReleaseMsg
+        } else {
+            Invoke-Fail "download failed: $($_.Exception.Message)"
+        }
     }
 
     $expected = $null
