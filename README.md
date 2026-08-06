@@ -51,7 +51,9 @@ published `SHA256SUMS`, smoke-test it with `--version`, and install it onto
 your `PATH` (`~/.local/bin` on Linux/macOS, `%LOCALAPPDATA%\llm-wikis\bin` on
 Windows). Re-running either installer upgrades, downgrades, or repairs the
 binary in place. Set `LLM_WIKIS_VERSION` before running to pin an exact
-released tag instead of installing the latest one.
+released tag instead of installing the latest one — required while only a
+pre-release exists, since an unpinned run only ever resolves to the newest
+non-prerelease tag and fails with an explicit message if there isn't one yet.
 
 ## Minimal configuration
 

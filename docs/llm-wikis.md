@@ -32,10 +32,14 @@ curl -fsSL https://raw.githubusercontent.com/gn00678465/llm-wikis/refs/heads/mai
 irm https://raw.githubusercontent.com/gn00678465/llm-wikis/refs/heads/main/install.ps1 | iex
 ```
 
-Both scripts install the **latest** published release by default. Set
-`LLM_WIKIS_VERSION` (an exact tag, e.g. `v0.1.0-beta`) before running either
-script to install a specific version instead — this pins, upgrades, or
-downgrades in place:
+Both scripts install the **latest** published release by default —
+specifically the newest tag *not* marked as a GitHub pre-release; a tag such
+as `v0.1.0-beta` is never picked up by an unpinned run. If no stable
+(non-prerelease) tag has been published yet, an unpinned run fails with an
+explicit message telling you to set `LLM_WIKIS_VERSION`, instead of a bare
+download error. Set `LLM_WIKIS_VERSION` (an exact tag, e.g. `v0.1.0-beta`)
+before running either script to install a specific version instead — this
+pins, upgrades, or downgrades in place:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/gn00678465/llm-wikis/refs/heads/main/install.sh | LLM_WIKIS_VERSION=v0.1.0-beta sh
@@ -59,9 +63,12 @@ irm https://raw.githubusercontent.com/gn00678465/llm-wikis/refs/heads/main/insta
 There is **no Intel/x86-64 macOS asset**. `install.sh` detects an
 unsupported OS/architecture (Intel Mac, non-x86-64 Linux) and fails with an
 explicit error rather than installing the wrong binary. A release also
-publishes `install.ps1`, `install.sh`, a `SHA256SUMS` checksum manifest, and
-GitHub artifact attestations for every executable and for `SHA256SUMS`
-itself.
+publishes a `SHA256SUMS` checksum manifest and GitHub artifact attestations
+for every executable and for `SHA256SUMS` itself — that is the complete
+asset set. `install.ps1` and `install.sh` are **not** release assets; both
+are fetched from `raw.githubusercontent.com/.../refs/heads/main/` (§1.1),
+which is their only source, so there is nothing installer-shaped to verify
+against a release's own checksum manifest.
 
 ### 1.3 Install paths and PATH changes
 
