@@ -570,6 +570,24 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
                 ) {
                     warnings.push(w);
                 }
+                // R-33 (PR #1 Codex review iteration 6 finding B): there is
+                // deliberately no early read of `enabledPlugins` here
+                // anymore. A prior version sampled the same check at this
+                // point purely to surface `CLAUDE_ENABLED_PLUGINS_DECLARED`
+                // as early as possible in generation order -- but that made
+                // two independent filesystem reads of the same settings
+                // file, and only the *later* one (inside
+                // `ClaudeAdapter::invoke`, immediately before spawn) was
+                // ever authoritative for enforcement. A wiki whose settings
+                // started declaring `enabledPlugins` only between this
+                // point and `invoke`'s check would enforce correctly but
+                // spawn with the warning silently missing, because the
+                // early sample (taken before the settings changed) said
+                // "not declared" and nothing ever re-checked. The warning is
+                // now pushed once, after `invoke_provider` returns, driven
+                // by `InvokeOutcome::claude_enabled_plugins_declared` --
+                // i.e. by the exact same authoritative read that enforces
+                // the allowlist, so the two can never disagree.
             }
             Agent::Codex => {
                 warnings.push(crate::providers::codex::read_scope_broad_warning());
@@ -691,6 +709,18 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
             }
         };
 
+        // R-31: the Claude wiki-settings surface check itself now runs
+        // inside `ClaudeAdapter::invoke`, immediately before the child
+        // process is actually spawned -- not here. A prior version ran it
+        // at this point (Step 10.5), but plugin-dir canonicalization,
+        // `ProviderRequest` construction, temp-dir resolution, temp-file
+        // creation, and argv/schema construction all still happened between
+        // this point and the real spawn, none of which this check needs to
+        // precede. One function (`crate::config::check_claude_wiki_settings_surface`)
+        // is still the single source of truth, called from both `doctor`
+        // (`src/doctor.rs`) and the Claude adapter's `invoke` -- not
+        // duplicated here.
+        //
         // Steps 11-12 (spec §8.1): invoke the provider; timeout/output-cap/
         // process-tree enforcement happens inside the process supervisor.
         self.step("invoke");
@@ -720,6 +750,16 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
         let invoke_outcome = self.invoke_provider(agent, provider_request, prompt);
         let child_exit_code = invoke_outcome.child_exit_code;
         let raw_format = invoke_outcome.raw_format;
+        // R-33: the one authoritative source for `CLAUDE_ENABLED_PLUGINS_DECLARED`
+        // (see the comment above, Step 6) -- pushed here, once, on every
+        // path (success or failure) below, since `warnings` is still moved
+        // into every remaining return in this function.
+        if invoke_outcome.claude_enabled_plugins_declared {
+            warnings.push(crate::output::Warning::wrapper(
+                crate::output::WrapperWarningCode::ClaudeEnabledPluginsDeclared,
+                crate::config::CLAUDE_ENABLED_PLUGINS_DECLARED_MESSAGE,
+            ));
+        }
 
         // Steps 13-14 (spec §8.1): parse native output, validate `wiki-query/v1`
         // (both already performed by `invoke_provider`, via `parse_*_output`).

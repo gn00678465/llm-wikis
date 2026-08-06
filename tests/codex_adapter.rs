@@ -357,6 +357,36 @@ fn auth_status_probe() {
     assert_eq!(err.code, ErrorCode::NonzeroExit);
 }
 
+/// Regression test: real codex-cli 0.146.0's `codex login status` writes its
+/// human-readable status line to **stderr**, with empty stdout (verified
+/// live, `docs/verification/llm-wikis-execution.md` Task 15) — not stdout,
+/// which the parser originally inspected exclusively. Stdout is still
+/// checked first (existing behavior/tests above are unchanged); stderr is
+/// consulted only as a fallback when stdout is empty/unrecognized.
+#[test]
+fn auth_status_probe_falls_back_to_stderr_when_stdout_is_empty() {
+    let runner = FakeProcessRunner::new();
+    let adapter = CodexAdapter;
+
+    runner.push_response(Ok(completed_outcome(b"", b"Logged in using ChatGPT", 0)));
+    adapter
+        .auth_status(&runner, &fake_executable())
+        .expect("stderr-only logged-in fixture succeeds");
+
+    runner.push_response(Ok(completed_outcome(b"", b"Not logged in", 1)));
+    let err = adapter
+        .auth_status(&runner, &fake_executable())
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::AuthRequired);
+
+    // Neither stream recognized: still INVALID_NATIVE_OUTPUT, not a silent pass.
+    runner.push_response(Ok(completed_outcome(b"", b"???", 0)));
+    let err = adapter
+        .auth_status(&runner, &fake_executable())
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidNativeOutput);
+}
+
 #[test]
 fn invoke_end_to_end_against_fake_runner() {
     let runner = FakeProcessRunner::new();

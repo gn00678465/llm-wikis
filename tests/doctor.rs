@@ -610,6 +610,84 @@ fn entrypoint_check_passes_for_real_registered_shape() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// R-29: Claude wiki-side .claude/settings.json surface (PR #1 Codex review
+// iteration 3 finding 1). Mirrors plugin_lifecycle_rejected above -- same
+// check name ("entrypoint"), same closed ENTRYPOINT_INVALID code, applied to
+// the wiki's own project settings this time instead of a local plugin's.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn claude_wiki_settings_declaring_a_forbidden_key_fails_entrypoint_check() {
+    let fixture = build_fixture();
+    fs::write(
+        fixture.project_root.join(".claude/settings.json"),
+        br#"{"apiKeyHelper":"echo hooked"}"#,
+    )
+    .unwrap();
+    let config = build_config(&fixture, vec![Agent::Claude]);
+    let runner = FakeProcessRunner::new();
+    queue_success_probes(&runner, Agent::Claude);
+    let store = probe_store(&fixture);
+
+    let request = doctor_request(&fixture, config, None, None, false);
+    let envelope = run_doctor(request, runner, &store);
+    let check = find_check(&envelope, WIKI_ID, Agent::Claude, "entrypoint").unwrap();
+    assert_eq!(check.status, CheckStatus::Fail);
+    assert_eq!(check.code.as_deref(), Some("ENTRYPOINT_INVALID"));
+}
+
+#[test]
+fn claude_wiki_settings_with_only_enabled_plugins_still_succeeds_with_the_r32_advisory_warning_matching_the_real_harness_engineering_wiki()
+ {
+    // R-32: enabledPlugins is still admitted (an explicit, evidence-backed
+    // risk acceptance, not denied) -- so the real harness-engineering wiki's
+    // settings.local.json keeps working -- but doctor now surfaces
+    // CLAUDE_ENABLED_PLUGINS_DECLARED as a warning on the same "entrypoint"
+    // check, not a silent pass, so an operator is told plainly.
+    let fixture = build_fixture();
+    fs::write(
+        fixture.project_root.join(".claude/settings.local.json"),
+        br#"{"enabledPlugins":{"llm-wiki@llm-wiki":true}}"#,
+    )
+    .unwrap();
+    let config = build_config(&fixture, vec![Agent::Claude]);
+    let runner = FakeProcessRunner::new();
+    queue_success_probes(&runner, Agent::Claude);
+    let store = probe_store(&fixture);
+
+    let request = doctor_request(&fixture, config, None, None, false);
+    let envelope = run_doctor(request, runner, &store);
+    let check = find_check(&envelope, WIKI_ID, Agent::Claude, "entrypoint").unwrap();
+    assert_eq!(check.status, CheckStatus::Warn);
+    assert_eq!(
+        check.code.as_deref(),
+        Some("CLAUDE_ENABLED_PLUGINS_DECLARED")
+    );
+}
+
+#[test]
+fn codex_pair_is_unaffected_by_a_forbidden_claude_wiki_settings_key() {
+    // The settings-surface check is Claude-specific (Codex does not load
+    // project_root/.claude/settings.json at all); a forbidden key there must
+    // not fail the Codex pair's own entrypoint check.
+    let fixture = build_fixture();
+    fs::write(
+        fixture.project_root.join(".claude/settings.json"),
+        br#"{"apiKeyHelper":"echo hooked"}"#,
+    )
+    .unwrap();
+    let config = build_config(&fixture, vec![Agent::Codex]);
+    let runner = FakeProcessRunner::new();
+    queue_success_probes(&runner, Agent::Codex);
+    let store = probe_store(&fixture);
+
+    let request = doctor_request(&fixture, config, None, None, false);
+    let envelope = run_doctor(request, runner, &store);
+    let check = find_check(&envelope, WIKI_ID, Agent::Codex, "entrypoint").unwrap();
+    assert_eq!(check.status, CheckStatus::Pass);
+}
+
 #[test]
 fn executable_check_reports_canonical_path_and_version_without_leaking_env() {
     let fixture = build_fixture();

@@ -5,7 +5,7 @@
 ```text
 D1 two real knowledge bases: D:\Wikis\agents and D:\Wikis\harness-engineering. Never written to.
 D2 no Git repository: approved 2026-07-29. Checkpoints replace commits. Task 14 blocked.
-Specification version in force: 0.2.1 (amended 2026-07-30, corrected 2026-07-31 after independent re-review — see its Revision History).
+Specification version in force: 0.2.13 (amended 2026-07-30, corrected 2026-07-31 after independent re-review, corrected 2026-08-04 for R-27 Claude wiki-side hook neutralization then corrected six more times the same day: R-28 after a live experiment showed R-27 broke project-skill discovery, R-29 after a live experiment showed the hook-only mitigation left other executable settings keys open, R-30 after a fourth review round narrowed the R-29 allowlist, closed a symlink gap, and moved the query-time check immediately before provider spawn, R-31 after a fifth review round closed a `.claude`-directory symlink gap, relocated the query-time check into the Claude adapter itself, and corrected several stale/contradictory prose claims found in a full sweep, R-32 reaffirmed `enabledPlugins`'s admission as an evidence-backed risk acceptance and added a new operator warning for it, R-33 after a sixth review round (no blocking findings) corrected a self-contradictory hook-neutralization sentence and made the enabledPlugins warning driven by the same authoritative pre-spawn check that enforces the allowlist, R-34 on 2026-08-05 after a seventh review round (zero code findings) corrected two mutation-detection/provider-call-ordering prose overclaims plus two more of the identical pattern found by a systematic quantifier sweep, R-35 later the same day after an eighth review round fixed a real code bug (a spawn-failure path silently dropped the enabledPlugins-declared signal), an over-strong "mechanically enforced" claim about model-behavior items, and a broken cross-reference the loop itself had introduced, R-36 later the same day after a ninth review round (code verified clean arm-by-arm) replaced seven rounds of sentence-by-sentence prose patching with one canonical safety-claims reference (operator guide §3.10) that every other safety sentence now points at — see its Revision History).
 ```
 
 ## Task 0 environment
@@ -395,3 +395,853 @@ Matches found and classification (every match analyzed; none were silently dropp
 - **Platform-gated evidence now executed natively (status flips remain Task 16's row-by-row job, per the checklist's own rule)**: the full suite ran natively on Linux and macOS, giving first real execution to the #[cfg(unix)] process tests (unix_process_group composition, grandchild_termination_kills_both_pids_unix, pgrep-based counting), the Linux/macOS default-config-path formulas at CLI level (OFF-021/OFF-022 platform columns), and tests/installers/verify-install-sh.sh (the POSIX INST rows authored in Task 13 and left PENDING there); Windows re-confirmed install.ps1 verification (23 passed / 2 explicit skips) on a clean runner.
 - **Local-environment artifact, documented not softened**: during this task's verification window the development host's tasklist invocations measured ~530ms (three timed runs: 542/519/536ms), exceeding the 400ms observation window of grandchild_termination_kills_both_pids and windows_job_object, which therefore failed locally with "saw 0" while remaining green on CI (runs 30691760367 and 30734114194, windows-2025). Known test-robustness ceiling: those two tests' observability depends on tasklist latency < the request timeout; noted for a possible future hardening (longer pre-kill window or event-based observation), deliberately not changed in this task to avoid speculative edits to CI-green tests.
 - Scope discipline: nothing under D:\Wikis touched; no tag created, no GitHub Release published (release.yml authored and asset verification scripts tested, publication remains forbidden until the full matrix + Task 16 verification); repo remains private per decision; all commits carry the Co-Authored-By trailer.
+
+## Auth-status parser fix (found during Task 15 Step 5, orchestrator-authorized 2026-08-02)
+
+- completed_utc: 2026-08-02T00:00:00Z
+- commit: c4ce25c (branch `task/15-docs-live`)
+- worker: task15-docs-live-worker-2026-08-02 (diagnosis + TDD fix, orchestrator-authorized exact scope); orchestrator (independent reproduction of both defects, scope ruling, independent argv-drift check on the later LIVE-02 failure)
+- files: src/providers/claude.rs 7af39d10c058b912e72cc51c157fe21387a52e48227f43d7c6145e1438aebddf
+- files: src/providers/codex.rs 922b833ed581e54f09fbabad0e3dbd1d152892f56f7be4d32816035aa50243f9
+- files: tests/claude_adapter.rs 112e831b67c97d428e88a185c42e05800aa2b5f283ae90a361e8b094eda6c7ee
+- files: tests/codex_adapter.rs a750839a25a7deea5c04d42a2286e6a952e2b666e4df7cb346fca53734b43321
+- commands: manual reproduction, `claude auth status --json` and `codex login status` invoked the same way the adapter does (temp cwd, stdout/stderr captured separately) -> Claude emits `{"loggedIn":true,...}` (no `authenticated` field); Codex writes `Logged in using ChatGPT` to **stderr** with **empty stdout**, exit 0. `cargo test --test claude_adapter --test codex_adapter --no-fail-fast -- --test-threads=1` (RED, before the fix, with only the two new regression tests added) -> exit 101, 1 failed each (`auth_status_probe_accepts_the_real_logged_in_field_shape`: `AppError { code: InvalidNativeOutput, message: "claude auth status output was missing the authenticated field" }`; `auth_status_probe_falls_back_to_stderr_when_stdout_is_empty`: `AppError { code: InvalidNativeOutput, message: "codex login status output was not recognized" }`), all other tests in both files still green (18/18, 20/20). Same command after the fix (GREEN) -> exit 0, 19/19 and 21/21. `cargo fmt --check` -> exit 1 (one formatting diff, in the new test, from `cargo fmt` collapsing a multi-line call — not a manual edit) -> `cargo fmt` -> `cargo fmt --check` -> exit 0. `cargo clippy --all-targets --all-features -- -D warnings` -> exit 0. `cargo test --all-targets --all-features --no-fail-fast -- --test-threads=1` (full suite, post-fix) -> exit 101, **325 passed, 2 failed** — the failures are exactly `grandchild_termination_kills_both_pids` and `windows_job_object` in `tests/process_supervisor.rs`, the documented Task 14 tasklist-latency artifact (cite CI run 30734114194, all-green including Windows; not iterated on here, per the plan's explicit instruction).
+- result: PASS
+- notes: **Root cause**: neither defect is a spec violation — specification §15 deliberately does not hardcode the auth-status field name or output stream, it only defines the outcome classes (recognized logged-out → `AUTH_REQUIRED`, malformed → `INVALID_NATIVE_OUTPUT`). Both are pure implementation gaps, never previously exercised against real provider CLI output (Task 11's original tests use `FakeProcessRunner` fixtures shaped `{"authenticated":...}`/stdout-only, which do not reflect the real Claude 2.1.220 / codex-cli 0.146.0 shapes) — confirmed by the orchestrator's independent reproduction before authorizing the fix. **Authorized scope, followed exactly**: (1) `ClaudeAuthStatusDocument` gained a second optional field `logged_in` (`#[serde(rename = "loggedIn")]`) and a new `is_authenticated()` accessor (`self.authenticated.or(self.logged_in)`) — `authenticated` was not removed or deprioritized, so every existing `{"authenticated":...}`-shaped fixture/test keeps passing unchanged (confirmed: `auth_status_probe`, the pre-existing test, still asserts against `{"authenticated":true/false}` and is untouched). (2) Codex's `auth_status` now classifies `stdout` first (unchanged existing behavior/tests), and only when that classification is `None` falls back to classifying `stderr` — the existing stdout-driven test (`auth_status_probe`) and every existing exit-code/nonzero-exit branch are unchanged; both-streams-unrecognized still reaches the original `INVALID_NATIVE_OUTPUT`/`NONZERO_EXIT` branches unmodified. No existing test or fixture was weakened or modified — both changes are additive (one new struct field + accessor; one `.or_else()` fallback expression) plus two new regression tests, confirmed by the diff being exactly four hunks across the two `src/` files. This fix unblocked Task 15 Step 5 (static `doctor` now reports `auth: pass` for both real providers, `ok:true`, exit `0`) and was a hard prerequisite for Step 6 — without it, `doctor --live` cascades to skip the live check entirely on any failing static check (`src/doctor.rs::run_static_checks`'s `any_fail` gate), so no live row could have run at all.
+- Scope discipline: only the four files listed above were touched; no other `src/`/`tests/` file was modified; nothing under D:\Wikis was touched.
+
+## Result-schema `"type"`-key fix (found via LIVE-02, orchestrator-authorized 2026-08-03)
+
+- completed_utc: 2026-08-03T00:00:00Z
+- commit: 435cd80 (branch `task/15-docs-live`)
+- worker: task15-docs-live-worker-2026-08-02 (TDD fix, orchestrator-authorized exact scope); orchestrator (root-cause diagnosis: PATH-shim argv/stdin capture with no live call, then a manual replay of the captured argv+stdin against real codex-cli 0.146.0, then a second replay with a hand-patched schema to validate the fix, all independent of this worker)
+- files: src/providers/mod.rs a6e8849a0285f57a022f915a0edc64c202d3f01b4c856723ce64b5788e6fc76c
+- files: tests/claude_adapter.rs 6e987482d563a2bf45c2cb6b491dd7df7982da68dd4c87cd03b9dd7ea9045aa4
+- commands: `cargo test --test claude_adapter -- every_result_schema_property_has_a_type_key --test-threads=1` (RED, before the fix, with only the new test added) -> exit 101, `panicked ... property "contract" is missing a "type" key: {"const":"wiki-query/v1"}`. Same command after the fix (GREEN) -> exit 0. `cargo test --test claude_adapter --test codex_adapter -- --test-threads=1` (full adapter suites, post-fix) -> exit 0, 20/20 and 21/21 (the new test plus every pre-existing test in both files, unmodified, all still green). `cargo fmt --check` -> exit 0 (no diff). `cargo clippy --all-targets --all-features -- -D warnings` -> exit 0, clean on the first pass. `cargo test --all-targets --all-features --no-fail-fast -- --test-threads=1` (full suite, post-fix) -> exit 0, **327 passed, 0 failed** — this run happened to include `grandchild_termination_kills_both_pids` and `windows_job_object` passing too (the documented Task 14 tasklist-latency artifact is timing-dependent, not a permanent local failure; both tests failed on this same machine in the two earlier full-suite runs this task recorded above and passed in this one, consistent with "tasklist latency < the request timeout" being the actual gating condition rather than a fixed pass/fail per host).
+- result: PASS
+- notes: **Root cause, independently diagnosed by the orchestrator, not this worker**: `result_json_schema()` in `src/providers/mod.rs` (shared by both adapters — Claude via inline `--json-schema`, Codex via a temp `--output-schema` file) declared `"contract": {"const": CONTRACT}` and `"knowledge_status": {"enum": [...]}` with no `"type"` key on either property. Claude's `--json-schema` validator tolerates a `const`/`enum`-only property (proven: LIVE-01/03/09 all passed against this exact schema shape). OpenAI's structured-output validator behind Codex's `--output-schema` does not, and rejects the entire request with an API-level HTTP 400 **before any model turn starts**: `"type":"error"` / `turn.failed`, code `invalid_json_schema`, message `"Invalid schema for response_format 'codex_output_schema': In context=('properties', 'contract'), schema must have a 'type' key."` — reproduced by the orchestrator by capturing the real binary's exact `codex` argv and stdin bytes via a `PATH` shim (no model call: this step alone consumed zero quota) and then replaying that exact captured invocation against the real `codex` executable. This is exactly why both original LIVE-02 attempts (2026-08-02 and the 2026-08-03 retry) failed identically and fast (~4.5-8s, well under a real model-turn duration): the API rejected the request at the schema-validation stage, before the assistant ever started working, and — because `src/providers/codex.rs::invoke()` discards `outcome.stdout` on any nonzero exit before parsing it (the pre-existing, still-undocumented-as-fixed gap recorded above) — that 400 response body was never visible anywhere in production's own error message, only in the orchestrator's separate raw-stdout capture. The 2026-08-03T00:00Z "usage-limit reset" hypothesis recorded in the Task 15 checkpoint below is **refuted**: the orchestrator's own successful trivial replay that day used a hand-written schema that happened to already carry `"type"` keys throughout, not the production schema — it never actually exercised the bug, which is why it appeared to succeed where production kept failing.
+- **Fix, authorized scope followed exactly**: two `"type": "string"` keys added, one to `contract` (alongside its existing `const`) and one to `knowledge_status` (alongside its existing `enum`) — nothing else in the schema touched (`answer`, `citations`, `gaps`, `warnings` already all carried `"type"`). Semantically identical JSON Schema (an explicit `"type": "string"` next to a `const`/`enum` that already implies string typing changes no accepted/rejected document under the spec — it only appeases a strict-mode validator that refuses to infer the type), so this is a pure serialization-completeness fix, not a contract change; no re-review of specification §7.2/§10.2/§10.3 was needed. Regression test `every_result_schema_property_has_a_type_key` in `tests/claude_adapter.rs` (the file that already held the `schema()` helper calling this shared function) parses the live schema JSON and asserts every entry under `properties` carries a `"type"` key, plus pins `contract`/`knowledge_status` to `"type":"string"` specifically — this is a structural assertion against the actual schema `result_json_schema()` emits, not a hand-duplicated copy, so it stays correct if the schema's other fields change shape later. No existing test was modified or weakened.
+- **Live validation of the fix, orchestrator-performed, independent of this worker's later reruns**: a second replay of the identical captured argv+stdin, this time against a hand-patched schema file matching the fix, succeeded — `turn.completed`, grounded answer, one resolved citation, and the model explicitly declined the wiki skill's own index-regeneration step because of the read-only envelope constraints (the external-readonly contract, spec §7.2, working exactly as designed). This worker's own Step 3 reruns of LIVE-02 and LIVE-04 below (through the actual rebuilt binary, not a manual replay) independently reconfirm this.
+- **The `invoke()` stdout-discard gap is deliberately left unfixed** (out of authorized scope, per explicit instruction): this episode is recorded as its concrete motivating case — a stricter OpenAI-side validator error was completely invisible in every production error message and diagnostic field until the orchestrator built a separate, out-of-band capture mechanism. A future task should consider surfacing capped stdout (mirroring how stderr is already capped and surfaced) on `NONZERO_EXIT` specifically for Codex, where `--json` mode means structured error information routinely arrives on stdout rather than stderr.
+- Scope discipline: only `src/providers/mod.rs` (one two-key addition plus a doc comment) and `tests/claude_adapter.rs` (one new test) were touched; no other `src/`/`tests/` file was modified for this fix; nothing under D:\Wikis was touched.
+
+## Task 15: Write Operator Documentation and Run Live Rows
+
+- completed_utc: 2026-08-03T00:00:00Z
+- worker: task15-docs-live-worker-2026-08-02; orchestrator (independent reproduction of the auth-parser defects and scope ruling; independent argv-drift check and stdout/stderr-capture ruling on the LIVE-02 failure)
+- files: docs/llm-wikis.md 849bd1a073215421942c0a5abbc0195cc272ba88aaed1fc3c3c3f8c6ede0e7e2 (created)
+- files: docs/verification/llm-wikis-execution.md self (this checkpoint and the auth-parser-fix checkpoint above)
+- files: tests/fixtures/claude/live09-plugin/.claude-plugin/plugin.json eec393e1a1d248499c1a00181f3a089446fb514ce7d971e664b45f4bc8e61d33
+- files: tests/fixtures/claude/live09-plugin/skills/probe-wiki/SKILL.md afa50b8d81b52f1d2aebef9d2b829a699a3144649d30ed25489207250616ee3d
+- files: tests/fixtures/claude/live09-wiki/SCHEMA.md a225d09e2a72636872e45e7c07bf9418325625442d9743aa83625685732e9f14
+- files: tests/fixtures/claude/live09-wiki/overview.md ad893849aecb0ac05d3f378e38ef99017b09fed83dc4e351fba9062c4ccb6ad7
+- files: tests/fixtures/claude/live09-wiki/topic-a.md 859dc51df006a38e3e122bb49bfe919edca03f587a60fdb3347341c76d658566
+- files: docs/verification/llm-wikis-preflight.md (not modified — see notes)
+
+### Step 1-3: `docs/llm-wikis.md`
+
+Created covering installation (latest/pinned commands, asset table, install paths/PATH changes per platform, checksum-then-smoke-test-then-install ordering, Apple-Silicon-only macOS/no Intel asset, Gatekeeper approval flow, SmartScreen warning, manual removal — no uninstaller in 0.1.0), configuration (three config paths, three cache paths, `--config` as an absolute-only operator/testing trust boundary never discovered from the caller's project and never accepted through MCP, non-overwriting `config init`, multiple wikis, per-wiki provider tables, `query_prompt` constraints and probe invalidation, provider executable overrides, project skills, Claude local plugins, Codex installed plugins explicitly out of scope even under `--ignore-user-config`, "`llm-wikis` never modifies a knowledge base" stated plainly, changed-skill-fingerprint -> `ENTRYPOINT_UNVERIFIED` until `doctor --live` reruns), and the query/security contract (commands, stdin transport, JSON envelopes, all 27 error codes' exit classes, the 14 read-only enforcement layers, full-content mutation detection, probe cache paths, live doctor's model-quota cost, both read-scope warnings plus the OS-sandbox recommendation, a per-error-class troubleshooting table, and the three operator misconceptions from the plan verbatim: the wrapper never reads/validates an index; regenerating a generated index before querying is advice, not a gate; `WIKI_SCHEMA_ABSENT` usually means `content_root` is one level too high).
+
+### Step 4: Offline gates
+
+- `cargo fmt --check` -> exit 0.
+- `cargo clippy --all-targets --all-features -- -D warnings` -> exit 0.
+- `cargo test --all-targets --all-features -- --test-threads=1` (before the auth-parser fix) -> exit 101, 24 passed/2 failed in `tests/process_supervisor.rs` (`grandchild_termination_kills_both_pids`: "expected parent+grandchild both alive before the deadline fires, saw 0"; `windows_job_object`: "expected the helper alive before the deadline fires") — **exactly** the documented Task 14 tasklist-latency artifact; not iterated on. A `--no-fail-fast` rerun confirmed every other test binary in the suite green (325 passed / 2 known-artifact failed total, matching CI run 30734114194 — windows-2025/macos-15/ubuntu-24.04 all green — cited as the authoritative pass). A second full-suite run after the auth-parser fix (see checkpoint above) reproduced the identical 325 passed/2 failed result.
+- `pwsh -NoProfile -File tests/installers/verify-install-ps1.ps1` -> exit 0, 23 passed, 0 failed, 2 skipped (both skips are POSIX-only rows explicitly out of scope for `install.ps1`, matching Task 13's own disposition). POSIX installer verification (`install.sh` / `verify-install-sh.sh`) was already executed natively by CI run 30734114194 ("Verify install.sh" on macos-15 and ubuntu-24.04); local POSIX runs remain unavailable/PENDING on this Windows host, per Task 13's own established disposition — not re-attempted here.
+
+### Step 5: Static doctor from an unrelated directory
+
+Built a temp config at a session-scratch path (outside the repo, outside D:\Wikis) reproducing `config.example.toml` verbatim (spec §6: the real `agents` and `harness-engineering` wikis, `D:/Wikis/agents` and `D:/Wikis/harness-engineering/wiki`), and ran the compiled `target\debug\llm-wikis.exe` from an unrelated temp cwd (also outside the repo and outside D:\Wikis):
+
+- `llm-wikis --config <temp>.toml --json list` -> exit 0, one JSON document, both wikis listed with `default_agent:"claude"`.
+- `llm-wikis --config <temp>.toml --json doctor --agent claude` -> **before** the auth-parser fix: exit 6, `ok:false`, both wikis' `auth` check `fail`/`INVALID_NATIVE_OUTPUT` ("claude auth status output was missing the authenticated field") — this is what surfaced the auth-parser defect (see checkpoint above), discovered for free during this static, non-billable step, zero model quota spent. **After** the fix: exit 0, `ok:true`, both wikis' `auth` check `pass`.
+- `llm-wikis --config <temp>.toml --json doctor --agent codex` -> same before/after pattern for Codex's `auth` check (`INVALID_NATIVE_OUTPUT`: "codex login status output was not recognized" -> `pass`).
+- Confirmed on the post-fix runs: one JSON document per command; zero live calls (`"live":false`); `CLAUDE_READ_SCOPE_BROAD` present (`warn`) for `harness-engineering` and absent (`read_scope: pass`) for `agents`; `CODEX_READ_SCOPE_BROAD` present (`warn`, unconditional) for both wikis under Codex; no `WIKI_SCHEMA_ABSENT` for either wiki (`wiki_structure: pass`, "content_root contains at least one Markdown file and a SCHEMA.md.").
+- The same temp config, extended with a `[wikis.live09-fixture]` entry pointing at the new fixture (Step 7 below), was separately confirmed clean via `llm-wikis --config <temp>.toml --json doctor --wiki live09-fixture --agent claude` -> exit 0, `ok:true`, all seven static checks `pass`, before any live call.
+
+### Step 6: Authorized live rows (LIVE-01, LIVE-02, LIVE-03, LIVE-04, LIVE-09)
+
+Per specification §16.2 and the Decision-update authorization (LIVE-01..04 and LIVE-09 only; LIVE-05..08 remain PENDING, platforms unreachable — never run, never inferred). Each row that ran did so through the real compiled `llm-wikis.exe`, `doctor --live --wiki <id> --agent <agent>` first (publishing the required current-fingerprint probe — a hard prerequisite for `query`, per spec §6.2/§15: every load mode is disabled for normal query until a current live-doctor probe exists), then the exact `--json query --wiki <id> --agent <agent> -- "<question>"` row shape from the checklist. The question used for every row was a deliberately generic, non-billable-content probe — `"In one sentence, what topic area does this wiki cover?"` (LIVE-01/02/03/04) or `"In one sentence, what is the placeholder fact recorded in this wiki?"` (LIVE-09, matching the synthetic fixture) — no wiki prose is recorded anywhere below, only citation slugs, counts, codes, and durations.
+
+**Independent before/after integrity check** (in addition to each invocation's own internal mutation snapshot, which would itself have failed the row with `READ_ONLY_VIOLATION` on any change): a full recursive SHA-256 tree digest (every file's normalized relative path + SHA-256, concatenated and re-hashed) was computed for both real wikis' entire on-disk trees before/after every distinct phase of this task, including the two failed LIVE-02 attempts, the orchestrator's own out-of-band diagnostic replays against the real skill, the schema fix, and the two final successful reruns (LIVE-02, LIVE-04):
+
+| Wiki | Checked at | count / digest | Identical to baseline |
+|---|---|---|---|
+| `D:\Wikis\agents` | before LIVE-01 | 124 / `fc2a39fc50b870ad23ec822b3ad6e5889b3dfb89beb2ddde0ab379b07b933b0a` | (baseline) |
+| `D:\Wikis\agents` | after LIVE-09 (first batch, incl. 1st LIVE-02 failure) | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\agents` | after the 2nd LIVE-02 failure (2026-08-03 retry) | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\agents` | after the orchestrator's shim-capture + two manual replays (schema diagnosis + fix validation) | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\agents` | before the schema-fixed LIVE-02 rerun | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\agents` | after the schema-fixed LIVE-02 rerun (doctor --live + query, PASS) | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\harness-engineering` | before LIVE-04 | 697 / `076ae8ddd8bdb4e3f39650988487f067d75aa22b18164eb1bdf1b56d1cdb12e9` | (baseline, unchanged since before LIVE-01) |
+| `D:\Wikis\harness-engineering` | after LIVE-04 (doctor --live + query, PASS) | 697 / `076ae8dd...cdb12e9` | yes |
+
+Every check across the entire task, spanning both real wikis, both failed Codex attempts, the orchestrator's independent diagnostic replays, and every passing live row, produced the identical digest — zero writes to either registered knowledge base at any point, proven independently of the wrapper's own mutation check on every single invocation.
+
+**Per-row results (final):**
+
+| Row | Result | Provider version | Duration (doctor --live + query) | raw_format | knowledge_status | Citations found/resolved | Warnings | Gaps | Forbidden-action attempt observed |
+|---|---|---|---|---|---|---|---|---|---|
+| LIVE-01 (Windows/Claude/`agents`) | **PASS** | Claude Code 2.1.220 | 45083ms + 47878ms | `claude-json` | grounded | 2/2 | 0 (no `CLAUDE_READ_SCOPE_BROAD`, correct — roots equal) | 1 | none — no command-execution tool exists for Claude (spec §7.2 item 8) |
+| LIVE-02 (Windows/Codex/`agents`) | **PASS** (after the schema fix; two earlier attempts failed — see root-cause detail below) | codex-cli 0.146.0 | 17164ms + 20409ms | `codex-jsonl` | grounded | 1/1 | 1 (`CODEX_READ_SCOPE_BROAD`, correct — unconditional for Codex) | 0 | none observed in the final passing run; not evaluable in the two failed attempts (production discards Codex's raw stdout on `NONZERO_EXIT` before any forbidden-action signal could be inspected — see the stdout-discard gap, documented not fixed) |
+| LIVE-03 (Windows/Claude/`harness-engineering`) | **PASS** | Claude Code 2.1.220 | 43978ms + 56989ms | `claude-json` | grounded | 2/2 | 1 (`CLAUDE_READ_SCOPE_BROAD` present, correct — strict containment) | 0 | none — no command-execution tool exists for Claude |
+| LIVE-04 (Windows/Codex/`harness-engineering`) | **PASS** | codex-cli 0.146.0 | 20765ms + 19025ms | `codex-jsonl` | grounded | 1/1 | 1 (`CODEX_READ_SCOPE_BROAD`) | 0 | none observed |
+| LIVE-09 (Windows/Claude/local-plugin fixture) | **PASS** | Claude Code 2.1.220 | 33946ms + 30990ms | `claude-json` | grounded | 2/2 | 0 | 0 | none — no command-execution tool exists for Claude |
+
+**LIVE-02 full story — two genuine failures, root-caused, fixed, and reconfirmed passing, not a flake dismissed as one:**
+
+1. **2026-08-02, first attempt**: `doctor --live --wiki agents --agent codex` returned `ok:false`, exit `4`; `live_contract` failed `NONZERO_EXIT` ("provider exited with code Some(1); stderr: " — stderr empty), `mutation` check `pass`. The orchestrator independently reproduced the argv path with empty stdin and confirmed every flag in `build_argv` is accepted by codex-cli 0.146.0 (ruling out argv/flag version drift like the auth-parser bug).
+2. **2026-08-03, retry (one retry only, per instruction)**: identical failure signature, 4534ms — much faster than any successful row, suggesting a fast, deterministic rejection rather than a mid-turn failure. Held per instruction rather than retried a second time.
+3. **Root cause found** (orchestrator, zero additional model quota for the diagnostic step): a `PATH`-shim capture of the real binary's exact `codex` argv and stdin (no live call), replayed manually against real `codex`, surfaced the actual API response body that production's own error message never showed: `"type":"error"` / `turn.failed`, HTTP 400, code `invalid_json_schema`, `"...('properties', 'contract'), schema must have a 'type' key."`. `result_json_schema()` (`src/providers/mod.rs`, shared by both adapters) declared `contract`'s and `knowledge_status`'s schema entries with only `const`/`enum`, no `"type"` — Claude's `--json-schema` validator tolerates this (which is exactly why LIVE-01/03/09 all passed against the identical unfixed schema); OpenAI's structured-output validator behind Codex's `--output-schema` does not, and rejects the request before any model turn starts. This explains both failures' near-identical fast timing and the empty stderr (the error was on stdout, in a stream `invoke()` discards on `NONZERO_EXIT` — the pre-existing gap documented above, now with a concrete motivating case). Full diagnosis, fix, and its own live validation: see the "Result-schema `\"type\"`-key fix" checkpoint above.
+4. **2026-08-03, schema-fixed rerun**: `doctor --live` -> `ok:true`, exit `0`, 17164ms; `query` -> `ok:true`, exit `0`, 20409ms, `raw_format:"codex-jsonl"`, grounded, 1/1 citation resolved, `CODEX_READ_SCOPE_BROAD` present. **PASS.**
+
+The originally-recorded "usage-limit reset" hypothesis for the 2026-08-02→2026-08-03 gap is **refuted**: the orchestrator's own 2026-08-03 trivial-schema replay succeeded only because its hand-written schema happened to already carry `"type"` keys throughout — it never exercised the actual bug in production's schema, so its success was not evidence of a transient condition clearing.
+
+**Disposition, final**: LIVE-01, LIVE-02, LIVE-03, LIVE-04, LIVE-09 = **PASS** (all five originally-authorized rows). LIVE-05..LIVE-08 = **PENDING**, unchanged (platforms unreachable, per the original authorization scope — never run, never inferred).
+
+### Step 7: Alternate load mode
+
+- **Claude local plugin entrypoint is configuration, not a product constant**: proven live end-to-end by LIVE-09 above (`tests/fixtures/claude/live09-plugin/`, entrypoint `/fixture-tools:probe-wiki` — distinct from both real wikis' `/wiki-query` and `/llm-wiki` — resolved, invoked, and returned a grounded, correctly-cited `wiki-query/v1` result through the `local_plugin` load mode). Also covered offline by the existing, unmodified `tests/config_contract.rs::claude_plugin_entrypoint_with_exactly_one_colon_accepted` and `tests/config_contract.rs::local_plugin_real_shape_passes` (both green in the full suite run above).
+- **Codex installed-plugin configuration fails closed as out of scope**: reused the existing, unmodified `tests/codex_adapter.rs::installed_plugin_fails_closed` (asserts a configured Codex plugin entrypoint fails closed before any provider invocation, since `--ignore-user-config` means user-level plugin configuration is never consulted) and `tests/config_contract.rs::codex_plugin_entrypoint_is_deferred_and_rejected` (asserts `$plugin-name:skill-name` is rejected by config validation itself, no process ever spawned) — both green in the full suite run above. No new fixture or parallel machinery was built for this half, per the instruction to reuse existing coverage where it already applies.
+
+### Step 8: Fixture/evidence sanitization
+
+- The LIVE-09 fixture (`tests/fixtures/claude/live09-plugin/`, `tests/fixtures/claude/live09-wiki/`) is entirely original, synthetic placeholder content — no real wiki prose, no account/session identifiers, no absolute user paths baked into any fixture file (the config entry pointing at it lives only in the session-scratch temp config, never committed).
+- Every live-row evidence entry above records only digests, counts, codes, durations, and provider versions — no full prompts, no answer prose, no citation content beyond bare slugs, no account/org/email identifiers (the `claude auth status --json` JSON payload observed during defect diagnosis, which does contain an account email/org ID, was inspected only in-session and is deliberately not reproduced anywhere in this file or in `docs/llm-wikis.md`).
+- `docs/verification/llm-wikis-preflight.md` was read but not modified — Task 15's live rows and the auth-parser defect are Task-15-scoped findings, not Phase-0 pre-implementation-spike findings, so they belong in this file (the execution record) rather than as a preflight addendum; no addendum was required.
+
+### Result and outstanding items
+
+- result: **PASS** for Steps 1-9, and for all five originally-authorized live rows (LIVE-01, LIVE-02, LIVE-03, LIVE-04, LIVE-09) — LIVE-02 reached PASS only after the result-schema fix above, following two genuine, root-caused, fully-evidenced failures. PENDING unchanged for LIVE-05..LIVE-08 (platforms unreachable — never run, never inferred).
+- Per the plan's own rule (Task 15 Step 6): "Do not infer success for an unexecuted row and do not claim a platform, provider, or wiki capability whose row is pending" — `docs/llm-wikis.md` makes no claim of live-verified support for LIVE-05..LIVE-08's platforms.
+- Scope discipline: nothing under D:\Wikis was written at any point (read-only wiki access throughout, confirmed by the eight independent SHA-256 tree-digest checks in the Step 6 table above, spanning every failed attempt, every orchestrator diagnostic replay, and every passing row); the only new fixtures added are under `tests/fixtures/claude/`, matching the plan's constraint; `docs/verification/llm-wikis-v0.1.0-checklist.md` was not touched (status column is Task 16's verifier's alone); the real user/machine probe cache (`%LOCALAPPDATA%\llm-wikis\probes-v1.json`) now holds exactly five current probe records — `agents`/claude, `agents`/codex, `harness-engineering`/claude, `harness-engineering`/codex, `live09-fixture`/claude — one per passing live row, as an ordinary, expected side effect of running `doctor --live` (per `src/doctor.rs::run_live_check`, publishing only happens on `envelope.ok`); the two originally-failed `agents`/codex attempts never reached `publish_probe`. This cache is the tool's own designed machine-local cache, not a wiki, and is explicitly outside the "never write to D:\Wikis" constraint.
+
+## Review loop iteration 1 (PR #1 code review, orchestrator-authorized fixes, 2026-08-04)
+
+- completed_utc: 2026-08-04T00:00:00Z
+- commits: 987fe97 (fix: neutralize wiki-side Claude settings hooks — Finding 1); commit 2 recorded once made (Findings 2/3 + this checkpoint)
+- worker: task15-docs-live-worker-2026-08-02 (fixes, TDD, empirical hook verification, spec/doc updates); Codex (PR #1 diff review, 3 findings); orchestrator (independent verification of all 3 findings before authorizing fixes)
+- files: src/providers/claude.rs 0cbeb55e9d8dfa9aa50d54eca27465b2772de35002d8c2cb3cb1e5a2402e3f3f
+- files: tests/claude_adapter.rs 76e6f0ddf8d4eda468d52340bdda2a5b6c58bb71651c3184c9c02d8ccddecd41
+- files: docs/llm-wikis.md d7d691437f5da5fcebdea79b68daf97e060231631f4520bfbdaf1dfafed05995
+- files: docs/2026-07-28-llm-wikis-external-query-design.md 643cf37291db1b03d163dc25a295d57128679d541f9475df0ebae8735d647ebc
+- files: docs/verification/llm-wikis-execution.md self (this section)
+- commands: `cargo fmt --check` -> exit 0 (no diff). `cargo clippy --all-targets --all-features -- -D warnings` -> exit 0, clean on the first pass. `cargo test --all-targets --all-features --no-fail-fast -- --test-threads=1` (full suite, post-fix) -> exit 0, **331 passed, 0 failed** (both process_supervisor timing tests passed on this run too — the documented tasklist-latency artifact remains timing-dependent, not a fixed local failure, consistent with the two full-suite runs recorded earlier in this task that hit it and the two that did not). Per-finding commands recorded in their own notes below.
+- result: PASS
+- notes: process, not content, first — per the new user directive, this is a fix-and-reverify loop on the same PR branch (`task/15-docs-live`), not a new task; no merge occurs until both the reviewer and this worker find nothing further.
+
+### Finding 1 (BLOCKING) — Claude project-hooks escape
+
+**The vulnerability, verified real, both by documentation and empirically live**: `src/providers/claude.rs::invoke`'s child process runs with `cwd = project_root` — the wiki's own directory, which this wrapper does not own and the wiki's operator controls. Claude Code 2.1.220's `-p` (print) mode auto-loads whatever `.claude/settings.json`/`settings.local.json` exists at that cwd and **executes any hooks they declare** (`SessionStart`, `PreToolUse`, ...) — confirmed via official documentation research (fetched, not assumed): settings precedence is CLI flags > managed/enterprise policy > local > project > user; `--setting-sources <sources>` accepts a comma-separated `user,project,local` list and, when passed `user` alone, excludes project/local settings from that session entirely; `disableAllHooks` is a documented `settings.json` boolean key ("Disables all hooks and any custom status line"); SessionStart hooks are documented to fire in non-interactive `-p` mode. The `--tools Read,Grep,Glob` restriction gates only Claude's *built-in* tool set — a hook `command` is arbitrary shell, entirely outside that gate. `.claude/`/`.agents/` immediately beneath `content_root` are excluded from the mutation snapshot (spec §12), so a hook writing there would be undetectable by that layer. Neither real registered wiki currently has any hooks (`agents`: skills only; `harness-engineering`: `settings.local.json` with only `enabledPlugins`) — the risk was prospective, not an incident, but real and unmitigated.
+
+**Empirical verification, exactly 2 live Claude calls, a disposable scratch fixture only (never a real wiki)**: built a throwaway fixture directory outside the repo and outside D:\Wikis with `.claude/settings.json` declaring one `SessionStart` hook (`matcher: "startup"`) whose command writes a marker file inside the fixture. (a) Invoked `claude` directly with the exact pre-fix argv shape (matching production's `build_argv` before this fix, byte-for-byte) against the fixture, trivial stdin prompt, cwd = fixture dir → **marker file was created**, `exit 0`, containing the hook's own JSON payload (`hook_event_name: "SessionStart"`, `source: "startup"`, plus session/transcript identifiers — not reproduced here, per evidence hygiene; SHA-256 `4e96ed6b68b4beaf2f18bcb023d00960dac03804436870f0f6e2057fb421c8a7` recorded for this worker's own diagnostic record only). This proves the vulnerability was real, not theoretical. (b) Same invocation, fixture, and prompt, with `--setting-sources user --settings {"disableAllHooks":true}` appended → **no marker file was created**, `exit 0`, and the query still completed normally (`is_error:false`, `subtype:"success"`, valid `structured_output`) — proving both closure and that the fix does not break ordinary operation. Call (a) reproduced the vulnerability on the first attempt; no further calls were needed or made.
+
+**Fix, TDD**: `tests/claude_adapter.rs::exact_argv` updated to pin the two new flags (`--setting-sources user`, `--settings {"disableAllHooks":true}`) immediately after the existing `--json-schema` pair — extending a pinned-argv assertion to require more of the real argv is strengthening, not weakening, since the old assertion (`args == expected`, full-vector equality) would have already failed the moment production added anything the test didn't know about; a new dedicated test, `hook_neutralization_flags_present_and_ordered_after_json_schema`, additionally pins exact position (`--json-schema`'s pair immediately followed by the two new flags, before any optional `--plugin-dir`) and proves the flags precede `--plugin-dir` even when one is configured (so a `local_plugin`-declared hook is neutralized too). Both new tests were confirmed RED first (`cargo test --test claude_adapter` -> exit 101, `E0432: unresolved import DISABLE_ALL_HOOKS_SETTINGS`, before the constant existed) then GREEN after the minimal production change: `build_argv` appends `--setting-sources user` and `--settings {"disableAllHooks":true}` (the exact value pinned as `pub const DISABLE_ALL_HOOKS_SETTINGS`) right after `--json-schema`, before the optional `--plugin-dir` block. No existing test was modified in a weakening direction; `exact_argv`'s extension was the only pre-existing test touched, and only to add elements to its expected vector.
+- **Spec updated to 0.2.4 (R-27)**: `docs/2026-07-28-llm-wikis-external-query-design.md` §10.2's canonical Claude argv gains the two flags in the pinned position, with a new paragraph stating the threat and mitigation verbatim (untrusted-cwd hook auto-load, `--tools` governing only built-in tools not hooks, the mutation-snapshot exclusion, `--setting-sources`/`--settings` semantics, and the honest residual gap that no flag can disable an admin-managed/enterprise-policy hook — noting the implementation machine has none). §12's enforcement-layer list gains a matching bullet. §23 Revision History gains the R-27 entry citing this exact evidence.
+- **`docs/llm-wikis.md` §3.4 updated**: inserted as new layer 7 (Claude read/search tools was layer 6; everything after renumbers 8-15) with the same threat/mitigation/residual-gap language in operator-facing terms; layer 15 (formerly 14, "no `llm-wikis` command writes to a knowledge base") is now explicit that this covers every write path `llm-wikis` itself has, but not a provider's own lifecycle-hook mechanism — that is what layer 7 neutralizes for Claude, with the same managed-policy exception restated.
+- **Scope discipline for this finding**: only `src/providers/claude.rs` (the two-flag addition, a constant, and doc comments), `tests/claude_adapter.rs` (one extended test, one new test), `docs/2026-07-28-llm-wikis-external-query-design.md`, and `docs/llm-wikis.md` were touched. No other adapter, no Codex-side change (Codex has no equivalent project-level hook mechanism in the invocation this wrapper uses — its argv already runs under `--sandbox read-only` with `--ignore-user-config`). The scratch hook-PoC fixture lives outside the repo (session temp) and was not committed — it is a disposable diagnostic artifact, not a reusable test fixture the offline suite depends on; the TDD regression tests above are what keeps this fix enforced going forward.
+
+### Finding 2 (important) — POSIX pinned-install example scoped the env var to the wrong process
+
+`docs/llm-wikis.md`'s pinned-version POSIX example read `LLM_WIKIS_VERSION=v0.1.0 curl -fsSL ... | sh` — in POSIX shell, a `VAR=value cmd` prefix scopes the variable to `cmd` only (here `curl`), never to `sh` on the other side of the pipe, which is the process that actually needs to see it. Fixed to `curl -fsSL ... | LLM_WIKIS_VERSION=v0.1.0 sh`, with a one-line explanatory note added directly beneath it. The Windows PowerShell example (`$env:LLM_WIKIS_VERSION = "v0.1.0"` on its own line, then `irm ... | iex`) was checked for the same class of bug and found correct as written: `$env:` assignment mutates the current process's environment block, and `Invoke-Expression` runs the downloaded script text in that same process/scope (not a child process), so the variable is visible to it — no fix needed there, verified rather than assumed.
+
+### Finding 3 (nit) — auth-status diagnostic message named only one accepted field
+
+After the earlier auth-parser fix (checkpoint above) made `ClaudeAuthStatusDocument` accept either `authenticated` or `loggedIn`, the `None` branch's diagnostic message still read "claude auth status output was missing the authenticated field" — accurate before that fix, misleading after it. Changed to "claude auth status output was missing both the authenticated and loggedIn fields". No existing test asserted the literal old string (confirmed by search before editing), so this is a pure message-content correction with nothing to update on the test side — not a weakening.
+
+### Result
+
+- result: **PASS** — all three Codex-reviewed, orchestrator-verified findings fixed; TDD followed throughout (Finding 1's two tests captured genuinely RED before GREEN); the Finding-1 vulnerability was empirically reproduced live before being empirically confirmed closed, on a disposable fixture, never a registered wiki; full offline gates clean; nothing under D:\Wikis touched. Per the new process rule, this loop continues — commit, push, and report back to the reviewer/orchestrator for another pass before Task 16 can begin.
+
+## Review loop iteration 2 (regression caught by the orchestrator, corrected fix, 2026-08-04)
+
+- completed_utc: 2026-08-04T00:00:00Z
+- commits: 24da5af (fix: remove --setting-sources from the Claude hooks fix); commit 2 recorded once made (this checkpoint)
+- worker: task15-docs-live-worker-2026-08-02 (re-verification, diagnosis input, corrected fix, TDD, re-verification live rows); orchestrator (caught the regression gap, ran the live four-arm diagnostic experiment and the two validation arms, ruled on the corrected fix)
+- files: src/providers/claude.rs 0d338a5a1ca265fb18045ee3520f54640ed8cb3c82271e6ae4c425b456d612ce
+- files: tests/claude_adapter.rs dec648d2051efd588aaa7f0203b47a12331c11e4a6615e5b832d7e8e594ffba0
+- files: docs/llm-wikis.md 25e20776cde32a9f94d432864260dda2d032110a453371323b4b95ea66dd381b
+- files: docs/2026-07-28-llm-wikis-external-query-design.md 7ec1af835aba39e06e190f059416ca8c401d8ad56f894e49cd1fd64b7d77207b
+- files: docs/verification/llm-wikis-execution.md self (this section)
+- result: PASS
+
+### The gap the orchestrator caught
+
+Iteration 1's Finding-1 fix (commit `987fe97`) changed the Claude argv, but LIVE-01/03/09's PASS evidence in this checkpoint was gathered under the *old* argv — that evidence no longer applied to the shipped code, and there was a concrete mechanism by which it could have broken (`harness-engineering`'s `.claude/settings.local.json` enables a plugin, `enabledPlugins":{"llm-wiki@llm-wiki":true}`, that `--setting-sources user` would stop loading; whether `/llm-wiki` actually resolved through that plugin path or through the project-skill file was unverified). Per the plan's fix-and-reverify loop rule, this required re-running the three affected rows before Task 16 could proceed.
+
+### Re-verification attempt (this worker) — FAILED, stopped immediately as instructed
+
+`doctor --live --wiki agents --agent claude` under the iteration-1 argv (commit `987fe97`) returned `ok:false`, exit `6`: `live_contract` failed `INVALID_NATIVE_OUTPUT`, `"claude result text was not valid wiki-query/v1 JSON: expected value at line 1 column 1"`, duration **2928ms** (far faster than any real model turn in this task). `mutation`: `pass`; the `D:\Wikis\agents` digest was unchanged (124 files, `fc2a39fc...`, identical). A confound was noted and flagged rather than guessed at: `claude --version` now reported **2.1.221**, not the **2.1.220** every prior row in this task had run against — the CLI had auto-updated mid-loop, and this worker could not distinguish "the argv change broke it" from "the CLI update broke it" without further live calls it was not authorized to make. Per instruction, this worker stopped immediately: no LIVE-03/09 attempt, no fix attempt, evidence reported to the orchestrator.
+
+### Root-cause diagnosis (orchestrator) — a live four-arm controlled experiment on a disposable scratch fixture, never a registered wiki
+
+Same fixture family as iteration 1's hook PoC (outside the repo, outside D:\Wikis), on Claude Code 2.1.221 throughout, isolating the CLI-update variable from the argv-change variable:
+
+| Arm | Argv | Entrypoint | Result |
+|---|---|---|---|
+| A | old (pre-iteration-1) | plain prompt, no slash command | exit 0, valid JSON — rules out the 2.1.220→2.1.221 update alone |
+| B | iteration-1 (`--setting-sources user` + `--settings`) | plain prompt | exit 0, valid JSON — rules out the new flags alone when no project skill is involved |
+| C | iteration-1 | `/probe` project-skill slash entrypoint (`<cwd>/.claude/skills/probe/SKILL.md`) | `"result":"Unknown command: /probe"`, `duration_ms:13`, `total_cost_usd:0` — **exactly** the LIVE-01 failure signature |
+| D | old | same `/probe` entrypoint | works, `structured_output` returned |
+
+**Root cause**: `--setting-sources user` excludes the `project` setting source, and Claude's **project-skill discovery is itself gated on that source** — this is not specific to `harness-engineering`'s `enabledPlugins` (that mechanism turned out to be a red herring, correctly flagged as unverified rather than assumed); it affects **both** real registered wikis, since both use `project_skill` load mode (`/wiki-query`, `/llm-wiki`).
+
+Two further arms validated the corrected fix, on the same fixture, now carrying both a project skill and a project `SessionStart` hook (writing a marker file):
+
+| Arm | Argv | Result |
+|---|---|---|
+| E | `--settings {"disableAllHooks":true}` only (no `--setting-sources`) | skill resolved and answered correctly (`structured_output` returned) **and** no marker file — hook blocked |
+| F | neither flag (control) | marker file **was** created — confirms the hook is genuinely live in this fixture, so E's absence is real suppression, not a fixture artifact |
+
+### Corrected fix
+
+`src/providers/claude.rs::build_argv` no longer emits `--setting-sources user`; `--settings {"disableAllHooks":true}` is kept unchanged, directly after `--json-schema`. `tests/claude_adapter.rs::exact_argv` now pins the corrected (shorter) argv exactly; the iteration-1 dedicated test was replaced (not left stale) with `hook_neutralization_settings_flag_present_without_excluding_setting_sources`, which pins `--settings`'s position and value **and** explicitly asserts `--setting-sources` never appears — a regression test against reintroducing the exact mistake this iteration corrects. Both changes were confirmed against the running suite: `cargo test --test claude_adapter -- --test-threads=1` → 21/21 passed after the correction (same count as iteration 1 — one test replaced, not added or removed).
+
+**Trust boundary, corrected and stated honestly** (in `src/providers/claude.rs`'s doc comment, `docs/2026-07-28-llm-wikis-external-query-design.md` §10.2/§12, and `docs/llm-wikis.md` §3.4, all three updated to match): the wiki's own project/local settings **are** loaded — required for skill discovery — and their reach is bounded by three independent layers rather than by non-loading: (a) `--settings {"disableAllHooks":true}` disables every hook regardless of source; (b) `--strict-mcp-config` plus the empty MCP config locks out any MCP server the settings might declare; (c) `--tools Read,Grep,Glob` bounds the built-in tool surface regardless of any tool-related setting. Residual gaps stated plainly: other keys in the wiki's settings are loaded and not individually enumerated or denied, only bounded by (a)-(c); and no CLI flag disables an admin-managed/enterprise-policy hook regardless (unchanged from iteration 1, and still verified absent on the implementation machine).
+
+**Spec versioning decision**: bumped 0.2.4 → **0.2.5** with a new revision ID **R-28**, rather than silently rewriting R-27's text in place. Judgment: this is a correction-of-a-correction to a spec-pinned argv (§10.2 is explicitly pinned per §6.2's "Every load mode is disabled for normal query until `doctor --live` succeeds... against... the exact current [...] entrypoint" discipline), material enough to affect both registered wikis' primary load mode, and the document's own established practice (0.2.2 → 0.2.3 was likewise "second correction from the same Task 2 Step 13 loop") is to give each substantive correction its own version and revision-history row rather than editing history in place — preserving an accurate record of what was actually shipped between commits `987fe97` and the correction commit below, not just what is true now.
+
+### Gates (post-correction)
+
+`cargo fmt --check` -> exit 0 (no diff). `cargo clippy --all-targets --all-features -- -D warnings` -> exit 0, clean on the first pass. `cargo test --all-targets --all-features --no-fail-fast -- --test-threads=1` -> exit 0, **331 passed, 0 failed** (identical total to iteration 1 — one test replaced; both process_supervisor timing tests passed this run too).
+
+### Re-verification of LIVE-01, LIVE-03, LIVE-09 under the corrected argv — all PASS
+
+All three ran through the rebuilt binary (`doctor --live` then `query`, same procedure as the original Step 6), on **Claude Code 2.1.221** (every prior Claude row in this task ran on 2.1.220 — the CLI auto-updated mid-loop, ruled out as a contributing cause by arms A/B above, but noted here for the record since it is a real environment change across this task's evidence). LIVE-02/LIVE-04 were **not** re-run: the Codex argv (`src/providers/codex.rs::build_argv`) was untouched by commit `987fe97` or by this correction, so their iteration-1-final evidence (both PASS, `codex-jsonl`, `CODEX_READ_SCOPE_BROAD` present) still applies unchanged.
+
+**Independent before/after integrity check**, same technique as every prior batch in this task:
+
+| Wiki | Checked at | count / digest | Identical to baseline |
+|---|---|---|---|
+| `D:\Wikis\agents` | before this re-verification batch | 124 / `fc2a39fc50b870ad23ec822b3ad6e5889b3dfb89beb2ddde0ab379b07b933b0a` | (baseline, unchanged all task) |
+| `D:\Wikis\agents` | after the failed re-verification attempt (this worker, iteration-1 argv) | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\agents` | after LIVE-01 (corrected argv, PASS) | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\harness-engineering` | before LIVE-03 | 697 / `076ae8ddd8bdb4e3f39650988487f067d75aa22b18164eb1bdf1b56d1cdb12e9` | (baseline, unchanged all task) |
+| `D:\Wikis\harness-engineering` | after LIVE-03 (corrected argv, PASS) | 697 / `076ae8dd...cdb12e9` | yes |
+| both wikis | final check, after LIVE-09 | 124/`fc2a39fc...` and 697/`076ae8dd...` | yes, both |
+
+**Per-row results:**
+
+| Row | Result | Provider version | Duration (doctor --live + query) | raw_format | knowledge_status | Citations found/resolved | Warnings |
+|---|---|---|---|---|---|---|---|
+| LIVE-01 (Claude/`agents`) | **PASS** | Claude Code 2.1.221 | 21001ms + 14269ms | `claude-json` | grounded | 2/2 | `PROVIDER_WARNING` (model-reported: it did not regenerate the index before answering, per the external-readonly constraints — no `CLAUDE_READ_SCOPE_BROAD`, correct, roots equal) |
+| LIVE-03 (Claude/`harness-engineering`) | **PASS** | Claude Code 2.1.221 | 19929ms + 21145ms | `claude-json` | grounded | 2/2 | `CLAUDE_READ_SCOPE_BROAD` present, correct — strict containment |
+| LIVE-09 (Claude local-plugin fixture) | **PASS** | Claude Code 2.1.221 | 18763ms + 20584ms | `claude-json` | grounded | 2/2 | none |
+
+LIVE-01's `PROVIDER_WARNING` is new relative to its iteration-1 run (which had none) — this is normal model-output variability between independent live calls, not a contract or safety concern: it is the model explicitly stating it respected the read-only/no-index-regeneration constraint, which is the external-readonly contract (spec §7.2) working as designed.
+
+### Scope discipline
+
+Only `src/providers/claude.rs` (the `--setting-sources` removal, corrected doc comment), `tests/claude_adapter.rs` (one test replaced), `docs/2026-07-28-llm-wikis-external-query-design.md` (0.2.4→0.2.5, R-28, corrected §10.2/§12 text), `docs/llm-wikis.md` (§3.4 corrected), and this checkpoint were touched. No Codex-side file was touched (correctly — the Codex argv was never part of this regression). Nothing under D:\Wikis was written at any point in this iteration (five independent digest checks above, all identical). No test was weakened: the replaced test asserts strictly more than a bare "flags present" check (it also asserts `--setting-sources`'s absence, a regression guard the iteration-1 test did not have).
+
+## Review loop iteration 3 (Codex BLOCKING review, orchestrator-confirmed escape, architectural fix, 2026-08-04)
+
+- completed_utc: 2026-08-04T00:00:00Z
+- commits: 2100cfd (fix: deny wiki-side Claude settings surface beyond a small allowlist); commit 2 recorded once made (this checkpoint)
+- worker: task15-docs-live-worker-2026-08-02 (TDD fix, .agents/.codex investigation, re-verification live rows); Codex (PR #1 diff review, 3 findings, one BLOCKING); orchestrator (independent empirical confirmation of finding 1 on a disposable scratch fixture, rulings on all three findings, architectural-fix instruction)
+- files: src/config.rs dbc4b1d82b08da89a139448700652364fc66b85b6284993cb311198b26231193
+- files: src/doctor.rs a68def1a7ebd6e7a52e9a2ecdd2103adedc99960293f76f73eab26093462141d
+- files: src/query.rs 6e50a22e9ebcea2e66d63c38b9011298f1fc8ea7474aa602dd4146276d59c062
+- files: src/providers/claude.rs 84fada0da59591405fbdde8e5badda8ffb0e41aa8604c001f427f1477a555f9f
+- files: tests/config_contract.rs 184bba1e11d2f689891972e661002985d9a44c71625a5b5445671f170357e959
+- files: tests/doctor.rs ae6294b81316a8f262dc9458ab7c99c82bb06a496a78b09013e6eb3c11231533
+- files: tests/query_service.rs b97b350a59664938b6f8f5d62e347ee8bc99323b87b14562866446edfa93e877
+- files: tests/claude_adapter.rs 3206b752a0862c3cf22be3118d49ea42764bb254f55703d5bcd4d52f86ae30c2
+- files: docs/llm-wikis.md 6bd46458fd9baeb0c8fea6e0cbf27a2357e31720848179dc350ed68deec1bba1
+- files: docs/2026-07-28-llm-wikis-external-query-design.md ccf8ad24818d083bc3aa0bec4d109c7f179e128948737a7b19435c29910f5d27
+- files: docs/verification/llm-wikis-execution.md self (this section)
+- result: PASS
+
+### Finding 1 (BLOCKING, confirmed) — `disableAllHooks` does not bound the whole wiki-settings surface
+
+The orchestrator's own scratch-fixture reproduction (claude 2.1.221, the iteration-2-corrected argv, including `--settings {"disableAllHooks":true}`) found that a wiki-side `.claude/settings.json` declaring `apiKeyHelper` as a command **executed it** — a marker file was created — proving the iteration-2 trust-boundary text ("their reach is bounded by disableAllHooks + strict-mcp-config + tools") was **false as shipped**. `disableAllHooks` bounds only the `hooks` key; several other documented settings keys execute a command or widen reach on their own: `apiKeyHelper` (proven), `awsCredentialExport`, `awsAuthRefresh`, `gcpAuthRefresh`, `otelHeadersHelper`, `statusLine` (all run a configured command); `permissions.additionalDirectories` (widens Read/Grep/Glob beyond `project_root`, falsifying `CLAUDE_READ_SCOPE_BROAD`'s "roots equal ⇒ read reach is exactly `content_root`" basis); `env` (e.g. an `ANTHROPIC_BASE_URL` redirect). Writes from such a command under `.claude/`/`.agents/` are invisible to the mutation snapshot (`src/snapshot.rs`), so this cannot be caught after the fact.
+
+**Architectural fix, mirroring the existing local-plugin lifecycle-rejection rule rather than inventing a new one**: the design doc already states that a local plugin declaring hooks/MCP/settings is *rejected by static doctor* (§12, implemented as `crate::probes::check_no_plugin_lifecycle_components`, error code `ENTRYPOINT_INVALID`, doctor check name `entrypoint`). This iteration extends exactly that principle to the wiki's own project settings: a new `crate::config::check_claude_wiki_settings_surface` inspects `project_root/.claude/settings.json` and `settings.local.json` and fails the wiki closed, same error code, same check name, if either file declares any key outside a closed allowlist.
+
+**Deny-by-default posture, deliberately an allowlist, not a denylist** (per instruction, and justified in the code comment): only `enabledPlugins` and `permissions.{allow,deny,defaultMode}` are admitted. `enabledPlugins` is data the wiki operator's own trusted configuration legitimately uses and does not itself execute anything or widen reach — the real `harness-engineering` wiki has exactly `{"enabledPlugins":{"llm-wiki@llm-wiki":true}}`. `permissions.allow/deny/defaultMode` are already bounded by the fixed `--tools Read,Grep,Glob`/`--permission-mode dontAsk` argv — they cannot grant a tool this project's own argv does not expose. `permissions.additionalDirectories` is specifically excluded from that admitted set (it widens reach). Every other key — enumerated today or not — fails closed. A denylist would only ever cover the keys named today; an allowlist survives a future Claude Code release adding another executable/reach-widening setting this project has never heard of.
+
+**Error code**: reused `ENTRYPOINT_INVALID` (no new code) and the existing `entrypoint` doctor check name — both chosen to mirror the local-plugin-lifecycle mechanism exactly, per instruction, rather than inventing a parallel taxonomy.
+
+**TOCTOU, closed rather than merely documented** (per instruction's stated preference): the same check now runs in **both** `src/doctor.rs::entrypoint_check` and `src/query.rs::QueryService::query` (Step 6, Claude branch, before the provider is ever invoked) — a wiki's settings changing between a passing `doctor` run and a later `query` cannot slip past a stale check the way the skill-fingerprint probe gate would otherwise let it (that gate only re-verifies the *skill* fingerprint, not the settings surface). The residual, honestly stated: an admin-managed/enterprise-policy hook cannot be disabled or detected by any flag or check this project controls — unchanged from iterations 1-2, still verified absent on the implementation machine.
+
+**TDD, with a genuine red run demonstrated by disabling the fix, not by deleting it**: eight unit tests in `tests/config_contract.rs` (no settings files at all passes; `harness-engineering`'s real `enabledPlugins`-only shape passes; `permissions.{allow,deny,defaultMode}` passes; `permissions.additionalDirectories` rejected; all ten named denied keys — `hooks`, `apiKeyHelper`, `awsCredentialExport`, `awsAuthRefresh`, `gcpAuthRefresh`, `otelHeadersHelper`, `statusLine`, `env`, `enableAllProjectMcpServers`, `enabledMcpjsonServers` — each independently rejected; `settings.local.json` checked independently of `settings.json`; malformed JSON and non-object JSON both fail closed rather than being silently skipped), three doctor-level integration tests in `tests/doctor.rs` (forbidden key fails the `entrypoint` check; the real `harness-engineering` shape still passes; a Codex pair is unaffected by a forbidden *Claude* settings key), and two query-level integration tests in `tests/query_service.rs` (a forbidden key is rejected before any process spawn — proven the same way `validate_before_spawn` already does, via a `FakeProcessRunner` with zero queued responses that would panic on any real spawn attempt; the benign `enabledPlugins`-only case still succeeds end to end).
+
+A genuine RED run was captured by temporarily short-circuiting both enforcement call sites (`if false && ...` in `doctor.rs`/`query.rs`, restored byte-identical afterward via `diff` against a backup, not merely reasoned about): `cargo test --test doctor --test query_service --no-fail-fast -- --test-threads=1` → 2 failures, exactly the two new integration tests that depend on enforcement (`claude_wiki_settings_declaring_a_forbidden_key_fails_entrypoint_check`: `assertion left == right failed, left: Pass, right: Fail`; `query_rejects_a_forbidden_claude_wiki_settings_key_before_any_spawn`: `FakeProcessRunner::run called with no queued response` — proving the check truly gates before any spawn, not merely that it returns an error eventually). Restored, re-ran: exit 0, all green again.
+
+### Finding 2 (important, confirmed) — argv tests pinned against the production constant, not a literal
+
+`tests/claude_adapter.rs`'s `exact_argv` and the hook-neutralization test both compared the built argv against `DISABLE_ALL_HOOKS_SETTINGS`, the same constant `src/providers/claude.rs::build_argv` uses to construct it — flipping the constant to `{"disableAllHooks":false}` would have kept both tests green, since the test and the code under test would drift together. Fixed: both now assert the literal string `{"disableAllHooks":true}` as the expected value; `exact_argv` additionally asserts the constant itself still equals that literal, so a future drift between the two is caught by a second, independent assertion. **Verified this actually catches the drift Codex named**, not merely reasoned about: manually flipped the constant to `false` in `src/providers/claude.rs`, re-ran `cargo test --test claude_adapter -- exact_argv hook_neutralization` → both failed with exactly the expected diff (`{"disableAllHooks":false}` vs. `{"disableAllHooks":true}`); reverted, re-ran → both green again.
+
+### Finding 3 (minor, confirmed) — checklist discrepancy, explicit note for Task 16, checklist not touched
+
+`docs/verification/llm-wikis-v0.1.0-checklist.md` row `PROC-22` ("exact Claude argv vector matches §10.2 target invocation") records the **pre-R-27** canonical argv as its expected value — it has neither `--settings {"disableAllHooks":true}` (R-27/R-28) nor any awareness of the R-29 deny check. Per instruction, **the checklist was not edited** — it is the independent reviewer's artifact and Task 16's verifier owns `status`/`evidence` changes to it exclusively. Recorded here instead, as an explicit input for Task 16: **`PROC-22`'s expected argv needs re-derivation against the current spec §10.2 canonical invocation (now including `--settings {"disableAllHooks":true}`) before that row can be judged PASS/FAIL** — its current text would incorrectly fail the real, correct, currently-shipped argv.
+
+### Codex/`.agents`/`.codex` investigation — not extended, reasoning stated
+
+Investigated whether Codex needs an equivalent deny check, per instruction. Findings, from `codex exec --help`/`codex --help` output and web-documented Codex behavior (cited in the spec §10.2 R-29 text and `docs/llm-wikis.md` layer 16):
+
+- Codex has an analogous project-level configuration surface (`.codex/config.toml`, project-local hooks via `hooks.json`/inline `[hooks]` tables, and project execpolicy `.rules` files) and its own hook-trust concept (`--dangerously-bypass-hook-trust`, "Run enabled hooks without requiring persisted hook trust for this invocation").
+- Unlike Claude's `-p` mode (which loads project/local settings unconditionally), Codex loads this entire project `.codex/` layer **only for a project it considers trusted**. An untrusted project's `.codex/config.toml`, project-local hooks, and project-local execpolicy rules are not loaded at all.
+- This wrapper's Codex invocation (`src/providers/codex.rs::build_argv`, spec §10.3) never establishes trust for the wiki's `project_root` — no interactive prompt occurs, `--skip-git-repo-check` and `--ask-for-approval never` do not grant it. So this class of surface fails closed by Codex's own architecture, without any `llm-wikis`-side change.
+- Neither registered wiki's `.codex/` (empty) or `.agents/` (contains only `skills/`) directory presently contains any hooks/config/execpolicy file, so there was nothing to reproduce a live escape against even if one were suspected.
+
+**Decision**: no Codex-side code change, no new Codex-side doctor check, and consequently **no Codex argv change** — `src/providers/codex.rs` was not touched in this iteration. LIVE-02/LIVE-04 were therefore **not** re-run, per the instruction's own condition ("unless your investigation changes Codex-side behavior, in which case re-run them"). One optional hardening was considered and deliberately deferred rather than added speculatively: `--ignore-rules` (disables loading project/user execpolicy `.rules` files) would be pure belt-and-suspenders on top of the trust gate already described — cheap, but a genuine Codex argv change that would itself need a live re-verification of LIVE-02/04 to justify, against a surface with no proven vulnerability and no current exposure in either real wiki. Flagged here for the orchestrator/user to request explicitly if wanted; not applied unilaterally.
+
+### Gates
+
+`cargo fmt --check` -> exit 1 first pass (one formatting diff in `src/query.rs`, from `cargo fmt` collapsing a multi-line call — not a manual edit) -> `cargo fmt` -> `cargo fmt --check` -> exit 0. `cargo clippy --all-targets --all-features -- -D warnings` -> exit 0, clean. `cargo test --all-targets --all-features --no-fail-fast -- --test-threads=1` -> exit 0, **344 passed, 0 failed** (331 from before this iteration + 13 new: 8 in `config_contract`, 3 in `doctor`, 2 in `query_service`).
+
+### Escape-fixture verification (orchestrator's exact scenario, reproduced, zero model quota)
+
+Built a disposable scratch fixture (outside the repo, outside D:\Wikis) reproducing the orchestrator's proof shape: a `project_skill`-mode wiki whose `.claude/settings.json` is exactly `{"apiKeyHelper":"echo hooked"}`. Ran the corrected binary's **static** `doctor` (no `--live`, zero model quota) against it:
+
+```text
+{"name":"entrypoint","status":"fail","code":"ENTRYPOINT_INVALID",
+ "message":"wiki .claude/settings.json declares a rejected settings key: apiKeyHelper"}
+```
+
+Exit `2`, `ok:false`. **The orchestrator's escape fixture is now rejected**, confirmed directly through the real binary, not only through unit tests.
+
+### Re-verification of LIVE-01, LIVE-03, LIVE-09 under the new doctor/query behavior — all PASS
+
+Doctor behavior changed (a new preflight check exists), so per instruction all three previously-passing Claude rows were re-run through the rebuilt binary, on Claude Code 2.1.221 (unchanged from iteration 2). LIVE-02/LIVE-04 not re-run (reasoning above — Codex argv unchanged).
+
+**Independent before/after integrity check:**
+
+| Wiki | Checked at | count / digest | Identical to baseline |
+|---|---|---|---|
+| `D:\Wikis\agents` | before this batch | 124 / `fc2a39fc50b870ad23ec822b3ad6e5889b3dfb89beb2ddde0ab379b07b933b0a` | (baseline, unchanged all task) |
+| `D:\Wikis\agents` | after LIVE-01 (PASS) | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\agents` | final check, after LIVE-09 | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\harness-engineering` | before this batch | 697 / `076ae8ddd8bdb4e3f39650988487f067d75aa22b18164eb1bdf1b56d1cdb12e9` | (baseline, unchanged all task) |
+| `D:\Wikis\harness-engineering` | after LIVE-03 (PASS) | 697 / `076ae8dd...cdb12e9` | yes |
+| `D:\Wikis\harness-engineering` | final check, after LIVE-09 | 697 / `076ae8dd...cdb12e9` | yes |
+
+Also confirmed via static (non-billable) `doctor --json doctor --agent claude` before any live call: `ok:true` for all three registered Claude wikis (`agents`, `harness-engineering`, `live09-fixture`), including `harness-engineering`'s real `enabledPlugins`-only `settings.local.json` passing the new check cleanly.
+
+**Per-row results:**
+
+| Row | Result | Provider version | Duration (doctor --live + query) | raw_format | knowledge_status | Citations found/resolved | Warnings |
+|---|---|---|---|---|---|---|---|
+| LIVE-01 (Claude/`agents`) | **PASS** | Claude Code 2.1.221 | 19358ms + 13825ms | `claude-json` | grounded | 2/2 | `PROVIDER_WARNING` (model-reported scope note; no `CLAUDE_READ_SCOPE_BROAD`, correct — roots equal) |
+| LIVE-03 (Claude/`harness-engineering`) | **PASS** | Claude Code 2.1.221 | 21391ms + 20362ms | `claude-json` | grounded | 2/2 | `CLAUDE_READ_SCOPE_BROAD` present, correct — strict containment; **the critical `enabledPlugins`-only case, confirmed still working end to end** |
+| LIVE-09 (Claude local-plugin fixture) | **PASS** | Claude Code 2.1.221 | 17696ms + 17381ms | `claude-json` | grounded | 1/1 | none |
+
+### Scope discipline
+
+`src/config.rs` (new `check_claude_wiki_settings_surface` + two constants), `src/doctor.rs` (one call site), `src/query.rs` (one call site, closing TOCTOU), `src/providers/claude.rs` (corrected trust-boundary doc comment; Finding-2 fix reused the same file), `tests/config_contract.rs`/`tests/doctor.rs`/`tests/query_service.rs`/`tests/claude_adapter.rs` (new/corrected tests), `docs/2026-07-28-llm-wikis-external-query-design.md` (0.2.5→0.2.6, R-29), `docs/llm-wikis.md` (§3.4/§3.8 corrected), and this checkpoint were touched. `docs/verification/llm-wikis-v0.1.0-checklist.md` was **not** touched (Finding 3, recorded as a note above instead). `src/providers/codex.rs` was **not** touched (investigated, reasoning above). Nothing under D:\Wikis was written at any point (six independent digest checks above, all identical, plus the static-doctor sanity check). No test was weakened: every new/changed assertion is strictly additive or strictly stronger (Finding 1's tests are new; Finding 2's fix replaces a self-referential comparison with a literal one, which can only fail more often, never less).
+
+## Review loop iteration 4 (Codex second BLOCKING review, narrowed allowlist, symlink close, TOCTOU honesty, 2026-08-04)
+
+- completed_utc: 2026-08-04T00:00:00Z
+- commits: 3c97d20 (fix: narrow wiki-settings allowlist to enabledPlugins, close symlink gap); commit 2 recorded once made (this checkpoint)
+- worker: task15-docs-live-worker-2026-08-02 (fixes, TDD, spec/doc audit, re-verification live rows); Codex (PR #1 diff review, iteration 4, two BLOCKING + two minor findings); orchestrator (independent verification/analysis of all findings, ruled out spending quota on finding 1 since fix (a) makes the vulnerability moot by construction, specified fix (b)/(c) exactly)
+- files: src/config.rs 5d135deade470a0f3aa641b421bdd6ab39aa6f73c29389a4321183dd82b8a952
+- files: src/query.rs 3e43b768b3949f64a998dc95c109f4f0bc71f3f32f445d501a9aa3e559dc68f1
+- files: tests/config_contract.rs 7d5d7a017308bf31b6b6a1f87fe0e7e0ba0aa4d0cda776e18e517ceda35b3558
+- files: tests/query_service.rs 71bd44c3b685cfaefb1697d45dd01d5165a5657283f53f98522f2dfd3d961ee8
+- files: docs/llm-wikis.md a87ce72d70ae1fabee14c309375557a211737a95cd712dddb6aa7ed992dfdedf
+- files: docs/2026-07-28-llm-wikis-external-query-design.md 379afa41516d065ad43c112e32671bb974bff1ab837436e572a499ed2a8a28bb
+- files: docs/verification/llm-wikis-execution.md self (this section)
+- result: PASS
+
+### Finding 1 (BLOCKING, accepted, fixed without spending quota per instruction) — the R-29 allowlist admitted `permissions` but never validated its values
+
+`--tools Read,Grep,Glob` bounds tool *names*; a permission rule such as `{"permissions":{"allow":["Read(C:/Users/alice/.ssh/**)"]}}` pre-authorizes the exposed `Read` tool against a specific path, which is not a tool-name concern the R-29 allowlist ever checked. **Fix (a)**: `ALLOWED_WIKI_SETTINGS_KEYS` shrunk to `enabledPlugins` alone — `permissions` is denied entirely, key and values, not partially validated (enumerating a safe subset of permission-rule *values* would be an open-ended parsing problem, not a closed one). The one remaining admitted key is additionally hardened: `enabledPlugins`'s value must now be an object whose every entry is a plain boolean, or the wiki is denied — closing the possibility of it becoming a smuggling vector for an unexpected shape. `enabledPlugins` remains admissible because it only toggles a plugin the *operator* already trusted at the user level (`~/.claude`) — a wiki's project settings cannot use it to introduce a new plugin source of their own, and any hooks an enabled plugin itself declares are independently killed by `--settings {"disableAllHooks":true}`. Cost check (the orchestrator's, cited rather than repeated): `D:\Wikis\agents` has no settings file at all, and `D:\Wikis\harness-engineering`'s `settings.local.json` contains only `enabledPlugins` — nothing real regresses.
+
+### Finding 2 (BLOCKING, accepted) — non-atomic check, two sub-issues
+
+**Fix (b), closable, closed**: a dangling `.claude/settings.json` symlink previously reported `NotFound` under a plain existence check and passed silently, letting its target be created *after* the check and *before* the provider read it — `.claude/` is excluded from the recursive special-entry scan (spec §6.1), so nothing else would ever catch this. `check_claude_wiki_settings_surface` now calls `fs::symlink_metadata` (not `fs::read_to_string` directly) on both settings paths and rejects any non-regular-file entry — symlink, junction, reparse point, directory, or other special entry — as `UNSAFE_FILESYSTEM_ENTRY`, reusing this codebase's own existing `is_special_entry`/`ErrorCode::UnsafeFilesystemEntry` special-entry-detection pattern (already used by `scan_tree`/`joined_checked` elsewhere in `src/config.rs`) rather than inventing a new one.
+
+**Fix (c), narrowed, honestly not claimed closed**: the `query`-time check moved from Step 6 (right after `resolve_and_check_artifact`, with five more steps — executable/version/auth probes, the fingerprint gate, prompt build, before-snapshot — still to come before the provider ever spawns) to immediately before `self.step("invoke")`, after all of that work. `src/providers/claude.rs`'s doc comment, `docs/2026-07-28-llm-wikis-external-query-design.md` §10.2/§12, and `docs/llm-wikis.md` §3.4 all now state this plainly: the check-to-spawn window is **narrowed, not closed** — a write landing in the remaining gap (plugin-dir resolution and `ProviderRequest` construction, both fast, non-adversarial operations) still wins the race. Full closure would require OS-level isolation (a held filesystem snapshot, or a mandatory-access-control policy) outside this wrapper's scope; no such mechanism was proposed or implemented, per the instruction not to implement one unilaterally.
+
+### Finding 3 (minor, accepted) — error-code taxonomy
+
+Judgment: **broadened `ENTRYPOINT_INVALID`'s spec §14 definition** rather than introducing a new code. Reasoning, stated in the spec's own R-30 revision entry: the exit class (2, argument/config-class, always preceding any provider call) and the doctor check name (`entrypoint`) this new check uses are already identical to the pre-existing local-plugin-lifecycle-rejection use of the same code for essentially the same class of concern ("is this invocation surface trustworthy") — a new code would fragment an already-coherent bucket without changing any exit/handling behavior downstream. `ErrorCode::ALL` stays at 27 entries; no test in `tests/error_contract.rs` needed touching (`exactly_twenty_seven_codes_exist` still holds).
+
+### Finding 4 (minor) — PROC-22 checklist staleness, deferred, Task 16 note kept prominent
+
+`docs/verification/v0.1.0-checklist.md` `PROC-22` was **not** edited (unchanged from iteration 3's ruling — it is the independent verifier's artifact). Restating prominently here, now covering the full R-27 through R-30 history for Task 16's benefit: **`PROC-22`'s expected argv is stale in two compounding ways** — (1) it predates R-27/R-28 entirely, so it has neither `--settings {"disableAllHooks":true}` nor any awareness that `--setting-sources user` was tried and reverted; (2) it has no awareness that a Claude wiki's `.claude/settings.json`/`settings.local.json` are now separately gated by the R-29/R-30 `check_claude_wiki_settings_surface` allowlist (`enabledPlugins` only, symlink-rejecting) — a check outside `build_argv` itself but load-bearing for the same trust boundary PROC-22 is meant to verify. Task 16's verifier should re-derive PROC-22's expected value against the current `src/providers/claude.rs::build_argv` **and** treat the settings-surface check as part of what "the exact Claude argv vector matches §10.2" should be understood to mean, even though it is not literally part of the argv vector.
+
+### Finding 5 (doc overclaim, accepted) — fingerprint-coverage overclaim, and a full re-audit
+
+Confirmed: `docs/llm-wikis.md` (and, found during the same audit, the **pre-existing spec text** at `docs/2026-07-28-llm-wikis-external-query-design.md` §12, predating this task) both claimed the excluded `.claude`/`.agents` directories are "covered by the skill-fingerprint mechanism" — false as a blanket claim. `skill_fingerprint_dir` (`src/query.rs`) resolves only the *configured skill's own directory* (`project_skill`: the skill file's parent directory; `local_plugin`: the whole `plugin_dir`, typically outside `content_root` entirely) — not the whole `.claude`/`.agents` tree. Both documents corrected to state precisely what is and is not covered: the one configured skill/plugin directory (fingerprint) plus, now, the two named Claude settings files (R-29/R-30's allowlist check) — everything else under `.claude`/`.agents` (other skills, slash commands, cached plugin data) remains genuinely unmonitored by both the snapshot and the fingerprint, stated as such rather than glossed over.
+
+**Full re-audit performed, per the instruction to remove every remaining overclaim, not just the one named**: reviewed all 17 layers of `docs/llm-wikis.md` §3.4 plus §2.8 and §3.5 against the current code. Findings beyond the named one: §2.8's "the harness enforces read-only mechanically regardless of what the skill's own text says" overclaimed completeness given the now-documented TOCTOU residual (fix (c)) and the "settings this project does not yet enumerate" residual (fix (a)'s own honest gap) — softened to point at §3.4's own per-layer residuals rather than asserting a blanket guarantee. No other overclaim was found in this pass; the remaining layers' claims were checked individually against the corresponding code (`--tools` restriction against `TOOLS` constant, MCP exclusion against the empty-config/disable-flag argv, snapshot coverage against `src/snapshot.rs`, Codex trust-gating against the iteration-3 research) and left as stated.
+
+### Gates
+
+`cargo fmt --check` -> exit 0 (no diff). `cargo clippy --all-targets --all-features -- -D warnings` -> exit 0, clean. `cargo test --all-targets --all-features --no-fail-fast -- --test-threads=1` -> exit 0, **349 passed, 0 failed** (344 from before this iteration + 5 new: a settings.json-as-directory case, a symlinked-settings-path case, `enabledPlugins` non-object, `enabledPlugins` non-boolean value, and the path-qualified `permissions.allow` case).
+
+### TDD, with two genuine red runs
+
+**Fix (a)/(b) together**: `src/config.rs` was temporarily reverted to the pre-iteration-4 shape (`permissions` re-admitted with `allow`/`deny`/`defaultMode`, symlink check removed, restored from a backed-up copy afterward and confirmed byte-identical via `diff`, not merely reasoned about). `cargo test --test config_contract -- permissions_key_is_rejected permissions_allow_with_a_path_qualified a_symlinked_settings_json --test-threads=1` -> exit 101, all 3 tests failed exactly as expected (`called Result::unwrap_err() on an Ok value`, i.e. the vulnerable code let each fixture pass). Restored, re-ran -> exit 0, all 3 green. **Fix (c)**: relocating the query-time check required updating (not just adding) `query_rejects_a_forbidden_claude_wiki_settings_key_before_any_spawn` — its `FakeProcessRunner` now needs the version/auth probe responses queued (`queue_success_probes`) and a seeded matching probe record (`seed_matching_probe`), since the check now runs *after* those steps; without the queued responses the test would panic at the earlier probe step rather than exercising the settings check at all, which the run below confirms actually happened before the fix was applied to the test.
+
+### Escape-fixture verification, both named cases, zero model quota
+
+Two disposable scratch fixtures (outside the repo, outside D:\Wikis), reproducing the orchestrator's exact examples, checked via the real binary's static `doctor` (no `--live`):
+
+```text
+permissions.allow path-qualified rule:
+{"name":"entrypoint","status":"fail","code":"ENTRYPOINT_INVALID",
+ "message":"wiki .claude/settings.json declares a rejected settings key: permissions"}
+
+dangling symlink at .claude/settings.json:
+{"name":"entrypoint","status":"fail","code":"UNSAFE_FILESYSTEM_ENTRY",
+ "message":"wiki .claude/settings.json is a symlink, junction, reparse point, or mount point"}
+```
+
+Both exit `2`, `ok:false`. **Both of the orchestrator's iteration-4 escape mechanisms are now rejected**, confirmed directly through the real binary.
+
+### Re-verification of LIVE-01, LIVE-03, LIVE-09 under the narrowed check — all PASS
+
+The settings check changed (narrower allowlist, symlink rejection, later placement), so all three previously-passing Claude rows were re-run through the rebuilt binary, on Claude Code 2.1.221 (unchanged). LIVE-02/LIVE-04 not re-run (Codex untouched by this iteration too).
+
+**Independent before/after integrity check:**
+
+| Wiki | Checked at | count / digest | Identical to baseline |
+|---|---|---|---|
+| `D:\Wikis\agents` | before this batch | 124 / `fc2a39fc50b870ad23ec822b3ad6e5889b3dfb89beb2ddde0ab379b07b933b0a` | (baseline, unchanged all task) |
+| `D:\Wikis\agents` | after LIVE-01 (PASS) | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\agents` | final check, after LIVE-09 | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\harness-engineering` | before this batch | 697 / `076ae8ddd8bdb4e3f39650988487f067d75aa22b18164eb1bdf1b56d1cdb12e9` | (baseline, unchanged all task) |
+| `D:\Wikis\harness-engineering` | after LIVE-03 (PASS) | 697 / `076ae8dd...cdb12e9` | yes |
+| `D:\Wikis\harness-engineering` | final check, after LIVE-09 | 697 / `076ae8dd...cdb12e9` | yes |
+
+Static (non-billable) `doctor --json doctor --agent claude` before any live call: `ok:true` for all three registered Claude wikis, including `harness-engineering`'s real `enabledPlugins`-only `settings.local.json` — the critical case — passing the narrowed allowlist cleanly.
+
+**Per-row results:**
+
+| Row | Result | Provider version | Duration (doctor --live + query) | raw_format | knowledge_status | Citations found/resolved | Warnings |
+|---|---|---|---|---|---|---|---|
+| LIVE-01 (Claude/`agents`) | **PASS** | Claude Code 2.1.221 | 20009ms + 18642ms | `claude-json` | grounded | 4/4 | none |
+| LIVE-03 (Claude/`harness-engineering`) | **PASS** | Claude Code 2.1.221 | 25637ms + 25703ms | `claude-json` | grounded | 2/2 | `CLAUDE_READ_SCOPE_BROAD` present, correct — strict containment; **the critical `enabledPlugins`-only case, confirmed still working end to end after the narrowed check** |
+| LIVE-09 (Claude local-plugin fixture) | **PASS** | Claude Code 2.1.221 | 22076ms + 18459ms | `claude-json` | grounded | 1/1 | none |
+
+### Scope discipline
+
+`src/config.rs` (allowlist shrunk to `enabledPlugins`, value validation, `symlink_metadata`-based special-entry rejection), `src/query.rs` (check relocated to immediately before `invoke`), `tests/config_contract.rs` (one test replaced, five new), `tests/query_service.rs` (one test updated to queue the probes now consumed before the check runs), `docs/llm-wikis.md` (§2.8/§3.4/§3.5/§3.8 corrected, layers renumbered), `docs/2026-07-28-llm-wikis-external-query-design.md` (0.2.6→0.2.7, R-30, §10.2/§12/§14/§15 corrected), and this checkpoint were touched. `src/doctor.rs` was **not** touched this iteration (its static `entrypoint_check` call site, added in iteration 3, needed no change — only the `query`-time call site moved). `src/providers/codex.rs` was **not** touched (unaffected by any of this iteration's findings). `docs/verification/llm-wikis-v0.1.0-checklist.md` was **not** touched (Finding 4). Nothing under D:\Wikis was written at any point (six independent digest checks above, all identical, plus two static-doctor sanity checks and the two escape-fixture checks, all zero-quota). No test was weakened: every changed assertion is strictly additive or strictly stronger than before (the replaced `permissions_allow_deny_default_mode_pass` now asserts rejection where it previously asserted acceptance — a correctness fix following the code's own corrected behavior, not a weakening in either direction).
+
+## Review loop iteration 5 (Codex third BLOCKING review + finding-1 resolution, `.claude`-parent close, invoke()-relocation, prose sweep, R-32 warning, 2026-08-04)
+
+- completed_utc: 2026-08-04T00:00:00Z
+- commits: (recorded below once made)
+- worker: task15-docs-live-worker-2026-08-02 (fixes, TDD, complete prose sweep, R-32 empirical test, re-verification live rows); Codex (PR #1 diff review, iteration 5, 2 BLOCKING + 3 prose-accuracy + 2 test-quality findings); orchestrator (finding-1 hold, then its own documentation research + empirical test to resolve it in a follow-up message, plus rulings on all other findings)
+- files: src/config.rs ad8d659f92c3d3f162c41a591cb106b9da90b8a64e2fd2a28724fa76e99f27a5
+- files: src/query.rs 07b8a26a42ea4c9082b1cbd21a329e26db506a8f4834b5e8f236ab836d30b95d
+- files: src/doctor.rs 9a169372b4c3bd88d16352338004cb8ea5c396514ec776af9967df376e1a2ed7
+- files: src/providers/claude.rs 38a87e80e00e731c6a3f8d725bf6655323324a339c46fc31456d3a31bf177422
+- files: src/output.rs e64d2e1501855ce1b2b262a896fdd57150e3cc5f46f7c8dc07a87f82f2035a1a
+- files: tests/config_contract.rs 29e3ca518b6eafe1d4a35a6ba6bc7ce6e9d32d13834e08be2f9f04cce386a3c4
+- files: tests/query_service.rs 043ae8ea5b58a8ba6a2afc4edf4ad3e14c44c2ab3679b64bedb8eb98f4d71d27
+- files: tests/doctor.rs 975f46cd9bba9b944925347de2b6baeef56699f0753c60f0bfdca4f681752f93
+- files: tests/output_contract.rs 26ef7c94ea6e0bef7970398bd408dd5f941ea62a0b6bb679aa9155611cfde7ba
+- files: docs/llm-wikis.md 5744d1c35171758dc7ce0be42a98b7c4a129630e565cc32ca35699dcb2535c2d
+- files: docs/2026-07-28-llm-wikis-external-query-design.md e7d9165c7da3e3f517fb790a885d85162307a966a9a1a4c30948cf3c51fc2e58
+- files: docs/verification/llm-wikis-execution.md self (this section)
+- result: PASS
+
+### Finding 2 (BLOCKING, accepted) — `.claude`-directory-itself symlink bypass
+
+`symlink_metadata` on the two settings *filenames* only examines the final path component. A `.claude` **directory** that is itself a symlink/junction pointing at an initially empty (or not-yet-existing) external location passed both files' `NotFound` branch the exact same way a dangling file-level symlink did, letting the real settings file be created at the true target afterward. Fixed: `check_claude_wiki_settings_surface` now checks `project_root/.claude` itself with the same `symlink_metadata`/`is_special_entry` treatment **before** looking at either filename — a missing `.claude` short-circuits both files at once (`Ok(false)`, no error); a special `.claude` fails `UNSAFE_FILESYSTEM_ENTRY`; a `.claude` that exists but isn't a directory fails `ENTRYPOINT_INVALID`. Verified there is no other unchecked intermediate component: `project_root` itself is already canonicalized/containment-checked by the caller before this function runs, and `.claude/<name>` is exactly two path components deep, so `.claude` is the only introduced-and-previously-unchecked segment. No `.agents` equivalent exists to fix: nothing in this codebase reads a Codex-side `.agents/settings*.json` file at all (Codex's own project-level configuration is a separate, already-investigated, trust-gated mechanism — iteration 3's finding, unchanged).
+
+### Finding 3 (IMPORTANT, accepted) — enforcement not genuinely last before spawn
+
+The R-30 call site (in `QueryService::query`, before `self.step("invoke")`) still had plugin-dir canonicalization, `ProviderRequest` construction, temp-dir/temp-file creation, and argv/schema generation between it and the real `runner.run` call. Fixed: the check moved out of `query.rs` entirely and into `ClaudeAdapter::invoke` (`src/providers/claude.rs`), inserted immediately before the one `runner.run` call that spawns the real provider process — after all of the above, none of which needed to precede it. One function, `check_claude_wiki_settings_surface`, remains the single source of truth: called unchanged from static `doctor` (`src/doctor.rs::entrypoint_check`) and now from this new call site — not duplicated. The residual check-to-spawn window narrows from "several query steps" to the syscall gap between the check returning and `Command::spawn` actually executing; this is **still not claimed closed**, stated explicitly in the function's doc comment, the call site's own comment, `docs/llm-wikis.md`, and the spec.
+
+**Honest limitation of the TDD proof for this specific finding**: unlike findings 1/2 (which have a clean red/green cycle via reverting the fix), R-30's and R-31's call-site *positions* are behaviorally indistinguishable through this project's test harness — none of the intervening steps (plugin-dir canonicalization, temp-file creation, argv construction) touch the `FakeProcessRunner`, so no test can observe "check ran before vs. after them" specifically. What Finding 8's strengthened test *does* prove (and would fail if regressed) is the coarser, still-meaningful property: the check runs strictly after the version/auth probes and strictly before the real spawn. The finer-grained R-30-vs-R-31 improvement was verified by full recompilation, the full test suite passing, and direct code inspection (the single relocated call site), not by a dedicated failing test — recorded here rather than presented as more rigorously proven than it is.
+
+### Findings 4, 5, 6 (prose contradictions) — complete sweep, every location checked listed
+
+A full grep-based sweep was run across every file touched by this PR (and pre-existing text they reference) for claims about the settings allowlist, TOCTOU, fingerprint coverage, and read reach, then each was reconciled against the current code. **Every location checked**, not only those changed:
+
+| # | Location | Verdict |
+|---|---|---|
+| 1 | `src/providers/claude.rs` — `DISABLE_ALL_HOOKS_SETTINGS` doc comment | Accurate, kept |
+| 2 | `src/providers/claude.rs` — `build_argv` doc comment (the full R-27/R-29 threat narrative, ~60 lines) | **Stale** — claimed `permissions.{allow,deny,defaultMode}` still admitted (false since R-30) and that the query-time check "clos[es] the TOCTOU window" (false since R-30 already only narrowed it, worse since R-31). Rewritten: slimmed to the hook-flag mechanism only, points to `check_claude_wiki_settings_surface`'s own doc comment as the single source of truth rather than restating it |
+| 3 | `src/providers/claude.rs` — `ClaudeAdapter::invoke` body | New (this iteration) — accurate by construction |
+| 4 | `src/providers/claude.rs` — `read_scope_broad_warning`/`CLAUDE_READ_SCOPE_BROAD_MESSAGE` | Accurate, unaffected, kept |
+| 5 | `src/config.rs` — `ALLOWED_WIKI_SETTINGS_KEYS` doc comment | Accurate, extended with R-32 risk-acceptance evidence |
+| 6 | `src/config.rs` — `check_claude_wiki_settings_surface` doc comment, "invisible to the mutation snapshot ... covered instead by `skill_fingerprint`" | **Stale** — contradicted the already-corrected §12 spec text (iteration 4). Fixed: states `skill_fingerprint` does *not* reliably cover it |
+| 7 | `src/config.rs` — same doc comment's closing symlink paragraph | Updated for the `.claude`-directory check and the new `invoke()` call site |
+| 8 | `src/query.rs` — R-30 comment block at the (now-removed) call site | **Stale by removal** — the whole block described a mechanism no longer at that location. Replaced with a short pointer comment plus the new R-32 advisory-warning call and its own comment explaining why its `Err` is deliberately ignored |
+| 9 | `src/doctor.rs` — `entrypoint_check` | Updated for the `Ok(bool)` signature change and the new warn branch |
+| 10 | `src/output.rs` — `WrapperWarningCode` | Extended (4th variant), accurate |
+| 11 | `docs/llm-wikis.md` §2.8 | **Stale** — "the harness enforces read-only mechanically regardless of what the skill's own text says" overclaimed completeness given the TOCTOU and settings-enumeration residuals. Softened to point at §3.4's own per-layer residuals |
+| 12 | `docs/llm-wikis.md` §3.4 layer 7 | Updated: `.claude`-directory check added to the description |
+| 13 | `docs/llm-wikis.md` §3.4 layer 8, "after every other query step" | **Stale** (named explicitly by the orchestrator) — false once the check lives inside the adapter. Rewritten to describe the `invoke()`-based placement and the syscall-gap residual precisely |
+| 14 | `docs/llm-wikis.md` §3.4 layer 9 (defense-in-depth argv flags) | Renumbered, cross-references fixed |
+| 15 | `docs/llm-wikis.md` §3.4 layer 17 (no-write-path bullet, Codex reasoning) | Checked, accurate, kept (cross-reference updated to "layers 7-9") |
+| 16 | `docs/llm-wikis.md` §3.5 mutation detection | Already corrected in iteration 4; re-checked this iteration, still accurate |
+| 17 | `docs/llm-wikis.md` §3.8 troubleshooting, `PATH_OUTSIDE_ALLOWED_ROOT`/`UNSAFE_FILESYSTEM_ENTRY` row | Extended to mention the `.claude` settings-path case |
+| 18 | `docs/llm-wikis.md` §3.8 troubleshooting, `ENTRYPOINT_INVALID` row | **Stale** (named explicitly) — still told operators `permissions.{allow,deny,defaultMode}` was admitted. Fixed |
+| 19 | `docs/llm-wikis.md` §3.8 — new `CLAUDE_ENABLED_PLUGINS_DECLARED` row | Added (R-32) |
+| 20 | Spec §6.1 (line ~307), the `.claude`/`.agents` special-entry-scan exclusion rationale | **Stale, pre-existing** (predates this task's R-27..R-31 work; a Phase-0/R-11-era sentence) — claimed blanket `skill_fingerprint` coverage, contradicting the already-corrected §12 text (iteration 4). Fixed to match, without rewriting the immutable §23 R-11 historical entry itself |
+| 21 | Spec §10.2 main paragraph (R-29/R-30 narrative) | **Stale** — rewritten in full for the `.claude`-directory check and the `invoke()`-based syscall-gap residual |
+| 22 | Spec §12 bullet list, settings-surface bullet | **Stale** — rewritten to match |
+| 23 | Spec §12 content-snapshot paragraph | Already corrected in iteration 4; re-checked, accurate |
+| 24 | Spec §13 wrapper-warning-codes sentence | Extended with `CLAUDE_ENABLED_PLUGINS_DECLARED`; spec-drift-test-verified (`section_13_wrapper_warning_codes_match_implemented_set`) |
+| 25 | Spec §14 `ENTRYPOINT_INVALID` row | Checked — already broadened in R-30, still accurate, no change needed |
+| 26 | Spec §15 static-checks bullet, "re-run identically at query time, as late as possible" | Updated to name the `invoke()`-based single-source-of-truth call site precisely |
+| 27 | Spec §23 Revision History, R-27 through R-30 entries | Historical record — deliberately **not** rewritten, consistent with this document's established practice (each entry is truth-at-the-time; corrections get new entries, R-31/R-32 added instead) |
+| 28 | Spec §10.2/§12/§15's "read reach"/`CLAUDE_READ_SCOPE_BROAD` claims (unrelated to the settings-surface work) | Checked, accurate, unaffected, kept |
+
+### Finding 1 resolution (held, then resolved by the orchestrator) — `enabledPlugins` kept, with a new warning
+
+The orchestrator's own follow-up message resolved the hold with documentation research plus an empirical test (both summarized here, full detail in spec §23 R-32): official plugin-component-type documentation lists Skills, Agents, Hooks, MCP servers, LSP servers, Monitors, Themes, Workflows, Output styles, Channels, and a `bin/` directory. Monitors are documented interactive-only; **LSP servers are documented as auto-starting subprocesses with no documented interactive-only restriction** — the theoretical reach path. `enabledPlugins` itself is documented as honored from project/local scope (unlike `permissions.allow`/`additionalDirectories`, documented to fail closed under `-p`); a plugin's own settings can only carry `agent`/`subagentStatusLine`, so project scope cannot use it to contribute `additionalDirectories` or install a new marketplace/plugin source of its own — that path is interactive/consent-gated.
+
+**Empirical test, method and result (sanitized — no absolute user paths, no plugin inventory beyond the one probe name)**: on Claude Code 2.1.221, using this project's exact argv (`--tools Read,Grep,Glob --permission-mode dontAsk --strict-mcp-config --mcp-config <empty> --settings {"disableAllHooks":true}`, cwd = a disposable fixture), a `.claude/settings.local.json` declaring `enabledPlugins` for **a plugin that is installed but not enabled in user-scope settings** (probe name: `ponytail`) was tested. The `system/init` event reported a loaded-plugin count matching only the pre-existing user-scope-enabled set (11), with the declared plugin **absent** and `plugin_errors: null`. A second run naming an already-user-enabled plugin also showed the same count. Conclusion: project/local-scope `enabledPlugins` had no observed effect in headless `-p` mode on this CLI version — the LSP/monitor reach path could not be exercised through it in this test.
+
+**Decision, explicitly not a safety guarantee**: `enabledPlugins` stays admitted (denying it would reject the real `harness-engineering` wiki), documented as an evidence-backed risk acceptance rather than a proven-safe mechanism, with the reasoning recorded in the allowlist's own code comment and the spec (not just this checkpoint) so a future maintainer finds it without needing to reconstruct the history. A new wrapper warning, `CLAUDE_ENABLED_PLUGINS_DECLARED`, is emitted by both `doctor` and `query` whenever a wiki's settings declare this key — kept short and non-alarmist per instruction. If a future Claude Code release starts honoring project-scope activation, this admission must be revisited; that is stated in both the code comment and the spec, not left implicit.
+
+### Finding 7 (test quality, accepted) — symlink tests silently succeeded on symlink-unprivileged hosts
+
+The pre-existing `try_symlink_file`/`try_symlink_dir` skip-with-`eprintln!`-and-return pattern is invisible on a passing test run (`cargo test` only shows captured output for failed tests), so a symlink-unprivileged CI host would show the settings-surface symlink-rejection tests as "ok" while exercising nothing — silent for a test covering a BLOCKING security fix specifically. Fixed by adding `symlink_file_or_fail_loudly`/`symlink_dir_or_fail_loudly` (new helpers, used only by the settings-surface symlink tests; the pre-existing, non-security-critical symlink tests elsewhere in the file keep their original skip behavior unchanged, out of this finding's scope) that `panic!` with a clear, actionable message instead of silently returning. Also added, per instruction: `a_symlinked_settings_local_json_is_also_rejected_not_just_settings_json` (the prior test only covered `settings.json`) and two `.claude`-parent-bypass tests covering Finding 2 (one with a dangling external target, one with a real, already-populated, forbidden settings file at the target — proving the directory-level rejection happens regardless of what the target eventually contains).
+
+### Finding 8 (test quality, accepted) — ordering not actually pinned
+
+`query_rejects_a_forbidden_claude_wiki_settings_key_before_any_spawn` proved "before *some* spawn" via a zero-response `FakeProcessRunner`, but moving the check back to before the version/auth probes would have kept it green (the probes would simply go uncalled, and the test asserted nothing that would notice). Strengthened using the existing `SharedRunner`/`Arc<FakeProcessRunner>` pattern already established elsewhere in this file (`adversarial_question_bytes_never_leak_into_argv`): the runner is queued with exactly the two probe responses, the query is run, and after it returns, `captured_requests()` is asserted to contain **exactly** those two requests (`--version`, then `auth status --json`, in that order) — proving the probes genuinely ran (not skipped) and nothing else did (the real `invoke` spawn, which would be a third `--add-dir`-shaped request, was never reached).
+
+### Gates
+
+`cargo fmt --check` -> exit 0 (no diff, after one `cargo fmt` pass fixing test-file formatting). `cargo clippy --all-targets --all-features -- -D warnings` -> exit 0, clean (one transient `dead_code` warning for the now-unused `try_symlink_file` helper, fixed by deleting it once its one remaining call site was replaced by `symlink_file_or_fail_loudly`). `cargo test --all-targets --all-features --no-fail-fast -- --test-threads=1` -> exit 0, **352 passed, 0 failed** (349 from before this iteration + 3 net new: two `.claude`-parent-bypass tests and one `settings.local.json`-symlink test; the doctor.rs `enabledPlugins` test was renamed/strengthened in place, not added).
+
+### TDD, with two genuine red runs (plus the doctor-level R-32 red/green already captured while wiring the warning)
+
+**Finding 2**: `check_claude_wiki_settings_surface`'s `.claude`-directory check was temporarily removed (backed up, restored, diffed byte-identical afterward). `cargo test --test config_contract -- claude_directory --test-threads=1` -> exit 101, both new tests failed exactly as expected (`called Result::unwrap_err() on an Ok value: false`; a code-mismatch panic showing `EntrypointInvalid` where `UnsafeFilesystemEntry` was expected, for the "real forbidden file at the target" variant, since without the directory-level check the function fell through to reading the file content and rejected it for the wrong reason). Restored, re-ran -> exit 0, both green.
+
+**R-32 warning**: the `claude_wiki_settings_with_only_enabled_plugins_...` doctor test was updated to expect `CheckStatus::Warn`/the new code *before* the production warning-emission code was wired in in one pass; running it against the not-yet-warning-emitting doctor.rs genuinely failed (`assertion left == right failed, left: Warn, right: Pass`) before the `doctor.rs`/`query.rs` wiring was added, confirmed in this session's own tool output, then passed once wired.
+
+### Escape-fixture verification, all four cases, zero model quota
+
+Four disposable scratch fixtures (outside the repo, outside D:\Wikis), checked via the real binary's static `doctor` (no `--live`):
+
+```text
+permissions.allow path-qualified rule (kept from iteration 4, re-confirmed with this iteration's binary):
+{"name":"entrypoint","status":"fail","code":"ENTRYPOINT_INVALID",
+ "message":"wiki .claude/settings.json declares a rejected settings key: permissions"}
+
+dangling final-component symlink at .claude/settings.json (kept from iteration 4, re-confirmed):
+{"name":"entrypoint","status":"fail","code":"UNSAFE_FILESYSTEM_ENTRY",
+ "message":"wiki .claude/settings.json is a symlink, junction, reparse point, or mount point"}
+
+.claude directory itself symlinked (new, finding 2):
+{"name":"entrypoint","status":"fail","code":"UNSAFE_FILESYSTEM_ENTRY",
+ "message":"wiki .claude directory is a symlink, junction, reparse point, or mount point"}
+
+settings.local.json symlinked (new, finding 7 coverage):
+{"name":"entrypoint","status":"fail","code":"UNSAFE_FILESYSTEM_ENTRY",
+ "message":"wiki .claude/settings.local.json is a symlink, junction, reparse point, or mount point"}
+```
+
+All four exit `2`, `ok:false`. **All four of the required escape mechanisms are rejected**, confirmed directly through the real binary.
+
+### Re-verification of LIVE-01, LIVE-03, LIVE-09 under the fully updated binary — all PASS, R-32 warning confirmed
+
+The settings check changed again (narrower special-entry coverage, relocated call site) and a new warning was added, so all three previously-passing Claude rows were re-run through the rebuilt binary, on Claude Code 2.1.221 (unchanged). LIVE-02/LIVE-04 not re-run (Codex untouched by any finding this iteration).
+
+**Independent before/after integrity check:**
+
+| Wiki | Checked at | count / digest | Identical to baseline |
+|---|---|---|---|
+| `D:\Wikis\agents` | before this batch | 124 / `fc2a39fc50b870ad23ec822b3ad6e5889b3dfb89beb2ddde0ab379b07b933b0a` | (baseline, unchanged all task) |
+| `D:\Wikis\agents` | after LIVE-01 (PASS) | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\agents` | final check, after LIVE-09 | 124 / `fc2a39fc...b933b0a` | yes |
+| `D:\Wikis\harness-engineering` | before this batch | 697 / `076ae8ddd8bdb4e3f39650988487f067d75aa22b18164eb1bdf1b56d1cdb12e9` | (baseline, unchanged all task) |
+| `D:\Wikis\harness-engineering` | after LIVE-03 (PASS) | 697 / `076ae8dd...cdb12e9` | yes |
+| `D:\Wikis\harness-engineering` | final check, after LIVE-09 | 697 / `076ae8dd...cdb12e9` | yes |
+
+Static (non-billable) `doctor --json doctor --agent claude` before any live call: `ok:true` for all three registered Claude wikis; `harness-engineering`'s `entrypoint` check now reports `warn`/`CLAUDE_ENABLED_PLUGINS_DECLARED` (expected, R-32) rather than `pass`, while the matrix-level `ok` stays `true` (a warning, not a failure).
+
+**Per-row results:**
+
+| Row | Result | Provider version | Duration (doctor --live + query) | raw_format | knowledge_status | Citations found/resolved | Warnings |
+|---|---|---|---|---|---|---|---|
+| LIVE-01 (Claude/`agents`) | **PASS** | Claude Code 2.1.221 | 20515ms + 14129ms | `claude-json` | grounded | 5/5 | none |
+| LIVE-03 (Claude/`harness-engineering`) | **PASS** | Claude Code 2.1.221 | 20519ms + 26908ms | `claude-json` | grounded | 2/2 | `CLAUDE_READ_SCOPE_BROAD` (correct — strict containment) **and, new this iteration, `CLAUDE_ENABLED_PLUGINS_DECLARED`** (correct — the real `enabledPlugins`-only case, row confirmed still passing with the warning present, as required) |
+| LIVE-09 (Claude local-plugin fixture) | **PASS** | Claude Code 2.1.221 | 13974ms + 13181ms | `claude-json` | grounded | 1/1 | none |
+
+### Scope discipline
+
+`src/config.rs` (`.claude`-directory check, `enabledPlugins`-declared tracking, R-32 message constant, doc-comment corrections), `src/query.rs` (settings check removed from Step 6, replaced with the R-32 advisory-only warning call), `src/doctor.rs` (`entrypoint_check` updated for the `Ok(bool)` signature and new warn branch), `src/providers/claude.rs` (the R-31 pre-spawn check + comment; `build_argv` doc comment slimmed/corrected), `src/output.rs` (`WrapperWarningCode` extended), `tests/config_contract.rs`/`tests/query_service.rs`/`tests/doctor.rs`/`tests/output_contract.rs` (new/updated/strengthened tests, no weakening), `docs/llm-wikis.md` (full sweep corrections above), `docs/2026-07-28-llm-wikis-external-query-design.md` (0.2.7→0.2.9, R-31 and R-32, full sweep corrections above), and this checkpoint were touched. `src/providers/codex.rs` was **not** touched (no finding this iteration concerned Codex). `docs/verification/llm-wikis-v0.1.0-checklist.md` was **not** touched (Finding 4, unchanged from iteration 4's ruling). Nothing under D:\Wikis was written at any point (six independent digest checks above, all identical, plus two static-doctor sanity checks and four escape-fixture checks, all zero-quota). No test was weakened: every new/changed assertion is strictly additive or strictly stronger (the strengthened `query_service`/`doctor` tests now assert more than before, never less; the two new fail-loudly helpers make a symlink-unprivileged host's result *more* informative — a loud failure instead of a silent pass — never less).
+
+### Prominent Task 16 note (Finding 4, restated with the full R-27..R-32 history)
+
+`docs/verification/llm-wikis-v0.1.0-checklist.md` row `PROC-22` ("exact Claude argv vector matches §10.2 target invocation") was **not** edited in any iteration of this review loop — it remains the independent verifier's artifact, and Task 16 owns its `status`/`evidence` columns exclusively. Its recorded expected argv predates **all** of R-27 through R-32: it has no `--settings {"disableAllHooks":true}` (R-27/R-28), and even the current, corrected argv (`src/providers/claude.rs::build_argv`) is **not by itself** sufficient to judge Claude wiki safety compliant with spec §10.2 anymore — a wiki's `.claude/settings.json`/`settings.local.json` (and the `.claude` directory itself) must also pass `check_claude_wiki_settings_surface`'s allowlist/special-entry gate (R-29 through R-31), and a wiki declaring `enabledPlugins` will now also emit `CLAUDE_ENABLED_PLUGINS_DECLARED` (R-32) as part of correct, expected behavior, not a defect. **Task 16's verifier should re-derive PROC-22's expected value against the current `build_argv` output** and treat the settings-surface check plus its R-32 warning as within scope of what "the exact Claude argv vector matches §10.2" should be understood to mean for this row, even though the check itself lives outside `build_argv`.
+
+### Worker handoff and independent re-verification (2026-08-04, continued)
+
+The worker that wrote the "review loop iteration 5" section above (`task15-docs-live-worker-2026-08-02`) exhausted its context mid-iteration, immediately after finishing that section, leaving its diff uncommitted in the working tree. A replacement worker took over and, rather than trusting the prior worker's recorded results, independently re-derived every claim in that section from scratch before committing anything.
+
+**Diff audit against Codex iteration-5 findings 1-8**: read in full and checked line-by-line against the code. Findings 2 (`.claude`-parent symlink bypass), 3 (check relocated into `ClaudeAdapter::invoke`, genuinely last before `runner.run`), 7 (loud-failure symlink helpers, `settings.local.json` coverage, `.claude`-parent tests), and 8 (ordering pinned via `captured_requests()` on a `SharedRunner`) were all present and code-verified correct by inspection. Finding 1's resolution (R-32: `enabledPlugins` kept, new `CLAUDE_ENABLED_PLUGINS_DECLARED` warning) was present in both `src/config.rs`'s doc comment and the spec, backed by the stated empirical method. No fix or addition was needed; no code, test, or doc prose was changed by this replacement worker beyond this addendum.
+
+**Gates, re-run independently**:
+- `cargo fmt --check` → exit 0, no diff.
+- `cargo clippy --all-targets --all-features -- -D warnings` → exit 0, clean.
+- `cargo test --all-targets --all-features -- --test-threads=1` → exit 0, **352 passed, 0 failed, 0 ignored** across 21 test binaries — independently matches the prior worker's recorded count exactly.
+
+**Escape-fixture re-run, independent fixtures** (built fresh under this session's own scratch directory, not reused from the prior worker), via the real compiled binary's static (non-`--live`) `doctor --json`:
+
+| Fixture | Expected | Observed |
+|---|---|---|
+| `.claude/settings.json` = `{"apiKeyHelper":"echo hooked"}` | fail, `ENTRYPOINT_INVALID` | fail, `ENTRYPOINT_INVALID`, "declares a rejected settings key: apiKeyHelper" |
+| `.claude/settings.json` = `{"permissions":{"allow":["Read(/some/secret/**)"]}}` | fail, `ENTRYPOINT_INVALID` | fail, `ENTRYPOINT_INVALID`, "declares a rejected settings key: permissions" |
+| `.claude/settings.json` a dangling file symlink | fail, `UNSAFE_FILESYSTEM_ENTRY` | fail, `UNSAFE_FILESYSTEM_ENTRY` |
+| `.claude/settings.local.json` a dangling file symlink | fail, `UNSAFE_FILESYSTEM_ENTRY` | fail, `UNSAFE_FILESYSTEM_ENTRY` |
+| `.claude` directory itself a symlink to an initially-empty external dir | fail, `UNSAFE_FILESYSTEM_ENTRY` | fail, `UNSAFE_FILESYSTEM_ENTRY`, "wiki .claude directory is a symlink..." |
+| `.claude/settings.json` = `{"enabledPlugins":{"x@y":true}}` only | pass with warning | `doctor` top-level `ok:true`; `entrypoint` check `warn`/`CLAUDE_ENABLED_PLUGINS_DECLARED` |
+
+All six matched expectation exactly.
+
+**Real-wiki static doctor, re-run against the read-only scratch config** (`task15-static-doctor/config.toml`, unmodified, read-only use): top-level `ok:true` for all five configured wiki/agent pairs (`agents`/claude, `agents`/codex, `harness-engineering`/claude, `harness-engineering`/codex, `live09-fixture`/claude). `harness-engineering`/claude's `entrypoint` check reports `warn`/`CLAUDE_ENABLED_PLUGINS_DECLARED` (expected, R-32) rather than a bare `pass`, while the wiki-level `ok` stays `true`.
+
+**Independent before/after tree-integrity check**: this worker wrote and ran its own recursive digest script (sorted relative-path + per-file SHA-256, concatenated, re-hashed) rather than reusing the prior worker's script or digest values — the concatenation format differs, so the absolute digest strings below are not bit-comparable to the `fc2a39fc...`/`076ae8dd...` values recorded earlier in this document, but the **file counts match exactly** (124 and 697, as this task specified) and, more importantly, this worker's own before/after pair is self-consistent:
+
+| Wiki | Checked at | count / digest (this worker's own script) | Identical to this worker's own baseline |
+|---|---|---|---|
+| `D:\Wikis\agents` | before any live call this session | 124 / `84b42e9e0efb8e0538f1755ea35a6d869b6fbd4e8d816cf8491e7258abe62a2b` | (baseline) |
+| `D:\Wikis\agents` | after LIVE-01/03/09 this session | 124 / `84b42e9e...abe62a2b` | yes |
+| `D:\Wikis\harness-engineering` | before any live call this session | 697 / `48cd60f7f9246ba4adafe501a789ddddfc3a65c5c2ec010064e9d7a6e8c35ce6` | (baseline) |
+| `D:\Wikis\harness-engineering` | after LIVE-01/03/09 this session | 697 / `48cd60f7...8c35ce6` | yes |
+
+**Live rows, freshly re-run this session** (independent invocations from the prior worker's own re-verification recorded above — live model calls are non-deterministic in answer text, exact citation count, and timing between independent runs; a different citation count or duration from the prior worker's numbers is expected variability, not a regression):
+
+| Row | Result | Provider version | Duration (doctor --live + query) | raw_format | knowledge_status | Citations | Warnings |
+|---|---|---|---|---|---|---|---|
+| LIVE-01 (Claude/`agents`) | **PASS** | Claude Code 2.1.221 | 20935ms + 14089ms | `claude-json` | grounded | 3 resolved | `PROVIDER_WARNING` (model-reported: index not regenerated per external-readonly constraints) |
+| LIVE-03 (Claude/`harness-engineering`) | **PASS** | Claude Code 2.1.221 | 17828ms + 40816ms | `claude-json` | grounded | 3 resolved | `CLAUDE_READ_SCOPE_BROAD` (correct — strict containment) and `CLAUDE_ENABLED_PLUGINS_DECLARED` (correct — confirms the R-32 warning fires end to end on the real `enabledPlugins`-only wiki) |
+| LIVE-09 (Claude local-plugin fixture) | **PASS** | Claude Code 2.1.221 | 23888ms + 15707ms | `claude-json` | grounded | 1 resolved | none |
+
+Exit code was 0 for every `doctor --live` and every `query` invocation above; every envelope's top-level `ok` was `true`. LIVE-02/LIVE-04 (Codex) were **not** re-run, per instruction — no finding this iteration touched `src/providers/codex.rs`, confirmed unmodified by `git diff --stat`.
+
+**Prose-sweep spot-check**: independently grepped the patched tree for the specific stale phrases the iteration-5 sweep claimed to have eliminated (`permissions.{allow,deny,defaultMode}` admitted, "closes/closing the TOCTOU", "covered instead by `skill_fingerprint`", the unqualified "after every other query step"). Every remaining match is either (a) explicitly historical/past-tense prose (`src/config.rs`'s "`permissions` was admitted in R-29 and removed in R-30" doc comment; `docs/llm-wikis.md`'s "An earlier version of this check also admitted..."; the immutable §23 R-29/R-30 Revision History table rows, which the sweep's own table (location #27) records as deliberately not rewritten) or (b) now factually accurate in context (`docs/llm-wikis.md` §3.4 layer 8's "after every other query step" is followed by a parenthetical enumerating literally every remaining step, which is true now that the check lives inside `ClaudeAdapter::invoke`). No live, current-tense overclaim was found. Also spot-checked `resolve_wiki_roots`/`run_static_checks` in `src/doctor.rs`: `project_root` is canonicalized and containment-checked by the `roots` check before `entrypoint_check` (and therefore `check_claude_wiki_settings_surface`) ever runs, confirming the function doc comment's claim that `.claude` is the only unchecked path component the function itself introduces.
+
+**Spec version and Task 16 note**: already at 0.2.9 (R-31 `.claude`-parent hardening + `invoke()` relocation + prose sweep; R-32 `enabledPlugins` warning) as delivered by the prior worker — no further bump was warranted by this addendum, since no additional finding surfaced. The "Prominent Task 16 note" immediately above this section, covering the full R-27→R-32 history, was confirmed still present and unedited.
+
+Nothing under `D:\Wikis` was written at any point in this addendum's work (two independent before/after digest pairs, both identical, using a digest script authored fresh this session; six escape-fixture checks and one real-wiki static-doctor check, all zero model quota). No test was weakened, added, or removed by this addendum — it is verification-only.
+
+## Review loop iteration 6 (Codex sixth review — NO blocking findings, 8/8 iteration-5 findings resolved; two small fixes, 2026-08-04)
+
+- completed_utc: 2026-08-04T00:00:00Z
+- commits: (recorded below once made)
+- worker: task15-docs-live-worker-2026-08-04-replacement (same worker that performed the iteration-5 independent re-verification above); Codex (PR #1 diff review, iteration 6: NO BLOCKING, 8/8 iteration-5 findings confirmed resolved, no regressions, plus 1 IMPORTANT prose finding + 1 MINOR behavioral finding); coordinator (relayed Codex's verdict and both findings, ruled on fix scope)
+- result: PASS
+
+### Codex's iteration-6 verdict
+
+No blocking findings. All eight findings from iteration 5 (the `.claude`-parent symlink bypass, the spawn-time relocation into `ClaudeAdapter::invoke`, the complete prose sweep, the loud-failing symlink test helpers, `settings.local.json` coverage, the `.claude`-parent bypass tests, and the strengthened ordering test) were independently confirmed resolved, with no regressions introduced. Two small items remained before the loop could close: one IMPORTANT prose defect (finding A) and one MINOR behavioral gap (finding B), both addressed in this iteration.
+
+### Finding A (IMPORTANT, prose) — self-contradictory hook-neutralization sentence
+
+`docs/2026-07-28-llm-wikis-external-query-design.md` §10.2 (then line 607) read: "`--settings {"disableAllHooks":true}` disables every hook regardless of source" and, in the same sentence's continuation, "**Honest residual gap**: no CLI flag ... disables an admin-managed/enterprise-policy hook." An operator reading only the first clause could believe managed hooks were neutralized too. Fixed by stating the scope correctly up front rather than only in a later clause: "disables every hook declared by user, project, local, or plugin-dir settings ... — it does **not** reach an admin-managed/enterprise-policy hook, stated fully in the residual gap below." Grepped the full touched-file set for the same pattern and fixed every live (non-historical) instance identically:
+
+| # | Location | Verdict |
+|---|---|---|
+| 1 | `docs/2026-07-28-llm-wikis-external-query-design.md` §10.2 (main paragraph) | **Fixed** — the flagged instance |
+| 2 | `docs/2026-07-28-llm-wikis-external-query-design.md` §12 enforcement-layers bullet | Checked — never made the unqualified "regardless of source" claim about hooks in the first place (states the residual gap as its own clause); no change needed |
+| 3 | `docs/2026-07-28-llm-wikis-external-query-design.md` §23 R-32 entry | Checked — its one "regardless" refers to plugin hooks staying disabled regardless of `enabledPlugins`'s admission, an unrelated and accurate claim; no change needed |
+| 4 | `docs/llm-wikis.md` §3.4 layer 9 | **Fixed** — same pattern, same rewrite |
+| 5 | `src/providers/claude.rs` — `DISABLE_ALL_HOOKS_SETTINGS` doc comment | **Fixed** — extended with the explicit admin-managed/enterprise-policy exception, since `build_argv`'s doc comment (next) now points here for it |
+| 6 | `src/providers/claude.rs` — `build_argv` doc comment | **Fixed** — "disables every hook regardless of source" → "disables every hook declared by those settings sources", cross-referencing the constant's own doc comment for the exception |
+| 7 | `tests/claude_adapter.rs` — `hook_neutralization_settings_flag_present_without_excluding_setting_sources`'s doc comment | **Fixed** — same rewrite |
+| 8 | `src/config.rs` — "`permissions` was admitted in R-29..." doc comment | Checked — past-tense historical narrative, does not use this pattern; no change needed |
+| 9 | `docs/verification/llm-wikis-execution.md` line ~600, "review loop iteration 2" checkpoint ("Trust boundary, corrected and stated honestly") | **Found, same pattern, deliberately left unedited** — this is a dated checkpoint entry from iteration 2 (2026-08-04, earlier the same day, already committed on this branch before this task's replacement worker took over), describing what was believed and stated true *at that point in the loop*. This document's established practice — used consistently by every subsequent iteration's own checkpoint section, and explicitly by the iteration-5 prose-sweep table for the spec's own §23 R-29/R-30 rows — is to never rewrite a dated record after the fact; corrections get a new, separately dated section instead (this one, and iteration-5's, both did exactly that). Rewriting line 600 would blur what was actually believed/shipped at each point in the loop, which is the entire reason these checkpoints exist. Recorded here explicitly, per instruction, rather than silently passed over. |
+| 10 | `src/config.rs` — `CLAUDE_ENABLED_PLUGINS_DECLARED_MESSAGE` ("Plugin hooks remain disabled and MCP remains locked regardless") | Checked — "regardless" here means regardless of `enabledPlugins`'s admission, not a hook-scope claim; accurate, no change needed |
+
+### Finding B (MINOR, real gap) — the authoritative check's `Ok(bool)` was discarded
+
+`src/query.rs` sampled `check_claude_wiki_settings_surface` once, early (Step 6, before the version/auth probes), purely to surface `CLAUDE_ENABLED_PLUGINS_DECLARED` as early as possible in the envelope's warning order. The actual enforcement — and the only read of the settings file that matters for correctness — happens later, authoritatively, inside `ClaudeAdapter::invoke` (R-31), immediately before spawn; that call's `Ok(bool)` was discarded (`if let Err(e) = ...`), since only the `Err` (reject) path mattered for enforcement. A wiki whose settings started declaring `enabledPlugins` only *between* the early sample and the authoritative check would still be enforced correctly (admitted, since the key is allowlisted) but would spawn with the warning silently missing — the operator told nothing about an admitted risk-acceptance key that was genuinely in effect for that exact call.
+
+**Fix**: `InvokeOutcome` (`src/providers/mod.rs`) gained a new field, `claude_enabled_plugins_declared: bool` — `false` for every Codex construction site (4, in `src/providers/codex.rs`) and for `no_child_outcome`; for Claude, captured from the authoritative check's `Ok` value and threaded through all 4 of `ClaudeAdapter::invoke`'s own construction sites (`src/providers/claude.rs`). The early speculative read in `src/query.rs` was removed entirely (not left as a redundant second read); the warning is now pushed exactly once, immediately after `invoke_provider` returns, driven by `invoke_outcome.claude_enabled_plugins_declared` — before any of the remaining return paths (success or failure) consume the `warnings` vector, so it reaches the envelope on every path. There is now exactly one filesystem read of the wiki's settings for this purpose, and it is the same one that enforces the allowlist — the two can no longer disagree.
+
+**TDD, with a genuine red run**: a new test, `enabled_plugins_warning_is_never_missed_even_if_settings_appear_after_the_probes_start` (`tests/query_service.rs`), builds a fixture with **no** `.claude/settings.local.json` at all, then uses a custom `ProcessRunner` (`SettingsInjectingRunner`) that writes the settings file to disk the *first* time `run` is called — i.e. no earlier than the version probe (Step 7), which is strictly after where the old early sample used to execute (Step 6) and strictly before `ClaudeAdapter::invoke`'s own authoritative check (Step 11). Run against the pre-fix code (`src/providers/claude.rs`, `src/providers/codex.rs`, `src/providers/mod.rs`, `src/query.rs` temporarily reverted via `git stash push` on exactly those four files, the new test left in place, restored afterward and confirmed identical via `git status`), it failed exactly as the finding predicts:
+
+```text
+thread 'enabled_plugins_warning_is_never_missed_even_if_settings_appear_after_the_probes_start' panicked:
+expected the enabledPlugins advisory warning even though the settings file only appeared after
+the version/auth probes started, got []
+```
+
+Restored via `git stash pop`, re-ran: passed. No test was weakened — this is a wholly new test; the two pre-existing `enabledPlugins` tests (`query_still_succeeds_when_wiki_settings_declare_only_enabled_plugins`, and the doctor-level R-32 test from iteration 5) are unchanged and still pass.
+
+### Gates
+
+`cargo fmt --check` → exit 0, no diff (after one `cargo fmt` pass over the new test code). `cargo clippy --all-targets --all-features -- -D warnings` → exit 0, clean. `cargo test --all-targets --all-features -- --test-threads=1` → exit 0, **353 passed, 0 failed, 0 ignored** across 21 test binaries (352 from before this iteration + 1 net new: `enabled_plugins_warning_is_never_missed_even_if_settings_appear_after_the_probes_start`).
+
+### Live rows: not re-run, reasoning stated
+
+Neither fix touches provider invocation semantics. Finding A is prose-only (doc comments and spec text; zero behavioral change, confirmed by an identical test count and an identical `cargo build` before/after). Finding B changes *which of two behaviorally-identical filesystem reads* drives a warning — not the argv (`build_argv` untouched), not the enforcement decision (the same function, `check_claude_wiki_settings_surface`, called from the same authoritative site, with the same allowlist), not anything else observable by the provider process. The full test suite (including `tests/claude_adapter.rs`'s `exact_argv` and every `check_claude_wiki_settings_surface`-exercising test) passing unchanged is sufficient evidence that provider-facing behavior is unaffected; no live model call was spent confirming it. Per instruction, this reasoning is stated here rather than the live rows being silently skipped.
+
+### Spec version
+
+Bumped 0.2.9 → **0.2.10**, new revision ID **R-33**, covering both findings together (they were reviewed, fixed, and gated in the same pass). Judgment: finding A alone (prose-only) would arguably not have warranted a version bump under this document's own practice of bundling pure wording fixes into a surrounding substantive revision rather than minting a bare prose-only ID — but finding B is a genuine behavioral fix (a warning that could previously be silently missed is now guaranteed), which does warrant one on its own, consistent with every prior R-id in this loop. Bundled into one entry rather than two since both were found, fixed, and verified in the same review round.
+
+### Scope discipline
+
+`src/providers/mod.rs` (`InvokeOutcome::claude_enabled_plugins_declared` field, `no_child_outcome` updated), `src/providers/claude.rs` (captures and threads the field through all 4 `invoke` construction sites; finding-A doc-comment fixes), `src/providers/codex.rs` (the new field added as `false` at all 4 construction sites — Codex has no equivalent concept), `src/query.rs` (early speculative read removed; warning now pushed once, post-invoke, from the authoritative field), `tests/query_service.rs` (one new test + its `SettingsInjectingRunner` helper), `tests/claude_adapter.rs` (finding-A doc-comment fix only, no test logic changed), `docs/llm-wikis.md` (§3.4 layer 9 finding-A fix), `docs/2026-07-28-llm-wikis-external-query-design.md` (0.2.9→0.2.10, R-33), and this checkpoint were touched. `src/config.rs`, `src/doctor.rs`, `src/output.rs` were **not** touched (no finding this iteration concerned the allowlist itself, doctor's own already-correct `Ok(bool)` handling, or the warning-code enum). `docs/verification/llm-wikis-v0.1.0-checklist.md` was **not** touched (independent verifier's artifact, unchanged ruling). Nothing under `D:\Wikis` was written — no live call was made this iteration at all (see "Live rows: not re-run" above), so no digest check was needed; the previous iteration's zero-write digests stand unchanged. No test was weakened: the one new test is strictly additive, and it is stronger than either pre-existing `enabledPlugins` test (it specifically proves the no-longer-possible failure mode, not just the happy path).
+
+## Review loop iteration 7 (Codex seventh review — zero code findings; two prose findings plus a systematic quantifier sweep, 2026-08-05)
+
+- completed_utc: 2026-08-05T00:00:00Z
+- commits: (recorded below once made)
+- worker: task15-docs-live-worker-2026-08-04-replacement (same replacement worker as iterations 5-6); Codex (PR #1 diff review, iteration 7: findings A/B from iteration 6 both confirmed resolved, all 8 `InvokeOutcome` sites threaded correctly, zero code findings, plus 2 new prose findings); coordinator (relayed Codex's verdict, specified the two fixes, and asked for a systematic sweep instead of another one-off patch)
+- result: PASS
+
+### Codex's iteration-7 verdict
+
+Findings A and B from iteration 6 (the self-contradictory hook-neutralization sentence; the discarded `enabledPlugins` boolean) both confirmed resolved. The `InvokeOutcome::claude_enabled_plugins_declared` threading across all 8 construction sites was independently re-verified correct. No behavioral regression anywhere in the PR. Zero code findings this round — the two remaining items were both prose-accuracy.
+
+### Finding A (IMPORTANT) — mutation-snapshot completeness overclaim
+
+`docs/2026-07-28-llm-wikis-external-query-design.md` §7.2's "How these are guaranteed" paragraph claimed the §12 content snapshot "detects any mutation that occurred regardless" — false, since §12 itself (and `src/snapshot.rs`'s own accurate module doc comment) excludes the two top-level `.claude`/`.agents` directories from the walk. A managed hook, or a write landing in the check-to-spawn race window, that touched only one of those two excluded trees would not be caught by this layer. Fixed: the sentence now states precisely what is detected (a mutation anywhere in the `content_root` tree the snapshot actually covers, i.e. everything except the two excluded top-level directories) and names what is not (a mutation confined entirely to one of those two trees).
+
+### Finding B (MINOR) — "before any provider call" imprecision
+
+`docs/llm-wikis.md` §3.4 layer 7 said an unsafe-settings rejection happens "before any provider call." False for `query`: its bounded, non-billable version and `auth status` probes (spec §8.1 steps 7-8) already invoke the provider executable by the time this check runs — R-31 (iteration 5) relocated the check to immediately before the real, answer-generating spawn, inside `ClaudeAdapter::invoke`, specifically *after* those two probes. An operator reading "before any provider call" literally would expect zero provider executable invocations on a rejected wiki, which is wrong. Fixed: rewritten to say the rejection happens before the query is ever *answered*, with the two probes named explicitly as invocations that do happen first, and `doctor`'s own static check clarified to run alongside (not instead of) its own version/auth probes in the same `doctor` call.
+
+### Systematic sweep, instead of a third one-off patch
+
+Six consecutive review iterations (2 through 7) each found one prose claim overstating what the code delivers, always a different sentence. Per instruction, this iteration ran a systematic sweep for the whole defect *class* rather than fixing only the two flagged instances: grepped `docs/llm-wikis.md`, `docs/2026-07-28-llm-wikis-external-query-design.md`, and every `///`/`//!` doc comment in `src/*.rs` for the absolute-quantifier/totality words `any`, `all`, `every`, `always`, `never`, `no `, `none`, `regardless`, `cannot`, `impossible`, `before any`, `at all`, then triaged every occurrence: does it make a safety, detection, or scope claim (in scope for deep verification against the actual code path) or is it a purely structural/mechanical claim (installer behavior, config-path resolution, argument parsing, data-shape guarantees) already covered by this project's existing 353-test suite and six prior review rounds without ever being flagged (out of scope for a claim-by-claim re-verification here, noted rather than silently dropped)?
+
+**Findings, safety/detection/scope claims only** — every location checked, not only those changed:
+
+| # | Location | Claim | Verdict | Code path checked |
+|---|---|---|---|---|
+| 1 | Spec §7.2 (line ~458) | "§12's before/after content snapshot detects any mutation that occurred regardless [of how it got there]" | **Rewritten** (Codex finding A) | `src/snapshot.rs::take_snapshot` excludes `.claude`/`.agents` immediate children of `content_root` (module doc comment, `dot_claude_and_dot_agents_immediately_under_content_root_are_excluded` test) |
+| 2 | Operator guide §3.4 layer 7 (line ~452) | Unsafe-settings rejection happens "before any provider call" | **Rewritten** (Codex finding B) | `src/query.rs::query` Step 7 (`executable_resolve_probes`, calls `adapter.version`/`adapter.auth_status`, both spawn the provider) runs before Step 11 (`invoke`, where `check_claude_wiki_settings_surface` now runs per R-31) — confirmed by direct reading of the function body's step order |
+| 3 | Operator guide §2.8 (line ~339) | "The before/after content snapshot (§3.5) still catches any mutation that does land, regardless of how it got there" | **Rewritten** (sweep-discovered, identical pattern to #1, independently repeats the same overclaim in a different section) | Same as #1 |
+| 4 | Spec §20 Acceptance Criteria (line ~1239) | "**No file in any knowledge base is created, modified, or deleted by any `llm-wikis` command.**" (bolded, unqualified) | **Rewritten** (sweep-discovered, same overclaim pattern, in the specification's own headline acceptance list this time) | Same as #1/#3, plus §10.2's own honestly-stated TOCTOU-narrowed-not-closed residual (`ClaudeAdapter::invoke`'s pre-spawn check comment) and the admin-managed-hook residual (`DISABLE_ALL_HOOKS_SETTINGS` doc comment, iteration 6) — narrowed to what actually holds unconditionally (no code path in `llm-wikis` itself writes), pointing at the honestly-stated residuals for the rest rather than implying they don't exist |
+| 5 | Spec Design Decision 17 / operator guide §4 heading, "`llm-wikis` never writes to a knowledge base. It has no command that does." | Same topic as #4, narrower phrasing | **True as written, no change** | Already scoped to the tool's own code paths ("It has no command that does"), not to what a compromised hook or a race window might cause — the distinction #4 needed to adopt |
+| 6 | `src/snapshot.rs` module doc comment (lines 1-18) | "recursively enumerates every directory and regular file beneath a canonical `content_root`, **except** the `.claude`/`.agents` directories when they are immediate children..." | **True as written, no change** | This is the layer's own implementation doc — already states the exclusion precisely; it was the *other* files' restatements of this same fact (findings 1/3/4 above) that had drifted, not the source of truth itself |
+| 7 | Operator guide §3.5 (lines ~551-581) | Full mutation-detection section, including "Neither mechanism covers every other file that could exist under `.claude/`/`.agents/`" | **True as written, no change** | Already correctly qualified from an earlier iteration's own prose sweep (iteration 5) — explicitly states what is *not* covered, the same honest framing findings 1/3/4 needed |
+| 8 | Operator guide §3.4 layer 7 (rest of the paragraph, post-fix) | `.claude`/`.agents` symlink/special-entry rejection, allowlist admits only `enabledPlugins` | **True as written, no change** | `src/config.rs::check_claude_wiki_settings_surface`, `tests/config_contract.rs` (`every_denied_key_is_rejected`, `a_symlinked_claude_directory_itself_is_rejected_the_parent_bypass`, etc.) |
+| 9 | Spec §10.2 / operator guide §3.4 layer 8, check-to-spawn TOCTOU residual ("narrows... does not close it") | Already qualified, not absolute | **True as written, no change** | `ClaudeAdapter::invoke`'s pre-spawn check comment (R-31/R-33) |
+| 10 | Spec §12 / `src/config.rs` doc comment, "`skill_fingerprint` hashes only the one configured skill/plugin directory, not the whole tree" | Already qualified, not absolute | **True as written, no change** | `compute_skill_fingerprint` in `src/query.rs`, `fingerprint_full_coverage` test |
+| 11 | Spec §6.1 line 724 / `src/config.rs:724`, `resolve_and_check_artifact` "before any provider invocation" | Genuine "before any provider call" claim, different check than #2 | **True as written, no change** | `src/query.rs::query` calls `resolve_and_check_artifact` at Step 6, strictly before Step 7's probes — unlike #2 (the settings-surface check, which R-31 deliberately moved *past* Step 7), this check was never moved and still runs first |
+| 12 | `src/query.rs` doc comment (line ~503), question validation "strictly before any provider process starts" | Genuine "before any provider call" claim | **True as written, no change** | Step 4 (`question_validate`) runs before Step 5 (roots), Step 6 (artifact check), and Step 7 (probes) — the earliest fallible step in the whole function |
+| 13 | Operator guide §3.9 item 1, "The wrapper never reads or validates a wiki's index" | Absolute claim about a whole subsystem | **True as written, no change** | No index-discovery/parsing code exists anywhere in `src/wiki.rs` (confirmed by direct inspection — the module has exactly two public entry points, neither reads index content) |
+| 14 | Spec §7.1 line 715 / operator guide, "the wrapper never trusts a model-provided wiki namespace" | Citation provenance claim | **True as written, no change** | `src/citations.rs::resolve_citations` constructs every `Citation` with the wrapper-supplied `wiki_id` parameter only; `every_public_citation_carries_the_wrapper_supplied_wiki_id_never_a_model_provided_one` test |
+| 15 | Operator guide §3.7, `doctor --live` "is never run implicitly by `query`" | Cross-command isolation claim | **True as written, no change** | `plain_query_service_never_calls_doctor_publish`, `never_triggers_live_doctor` tests |
+| 16 | Codex adapter doc comment (`src/providers/codex.rs:21-25`), `CODEX_READ_SCOPE_BROAD` "never conditional... regardless of roots", "unconditionally on every Codex query and static doctor check" | Absolute warning-emission claim | **True as written, no change** | `read_scope_check_absent_when_roots_equal_present_for_codex_always` (doctor), `read_scope_broad_always` (codex_adapter.rs) |
+
+**Excluded from deep verification, with reasoning stated rather than silently dropped**: the grep also matched several dozen occurrences in installer mechanics (§1 of the operator guide — checksum-before-install, PATH-file idempotency, Gatekeeper/SmartScreen guidance), config/cache path resolution (§2.1-2.2, "never from the caller's cwd"), CLI argument parsing (`src/cli.rs` — `all` rejection, positional/stdin mutual exclusion), citation grammar mechanics (`src/citations.rs` — slug charset, dedup order), and process-supervisor internals (`src/process.rs` — thread-join guarantees, `Command` argv-not-string invocation). These are functional/mechanical claims, not safety/detection/scope claims about the query-time security model Codex's six prior findings all concerned; each is independently covered by existing, passing tests named for exactly the property claimed (e.g. `never_reads_or_discovers_from_the_callers_current_directory`, `relative_config_override_rejected_before_anything_else`, `shell_metacharacters_and_quotes_in_the_question_are_never_interpreted`, `windows_case_folding_does_not_authorize_a_case_mismatched_citation`). None were re-verified line-by-line for this sweep; this is stated explicitly as the sweep's scope boundary, not implied.
+
+**Result stated explicitly, per instruction**: beyond the two Codex-flagged instances, the sweep found exactly **two** further instances of the identical pattern (#3, #4 above) and **zero** instances of any other pattern (a false "before any provider call"/"never invokes"/"always closes" claim beyond finding B). Both new instances are corrected. This is not "nothing else to fix" — two more were found and fixed — but it is a bounded, now-exhausted result for this specific defect class across the documentation surface the coordinator specified, not merely "the two flagged sentences and nothing more."
+
+### No code changes; no live rows
+
+This iteration's fixes are entirely `docs/llm-wikis.md` and `docs/2026-07-28-llm-wikis-external-query-design.md` prose — no `src/*.rs` file needed a change (every doc-comment candidate the sweep found was already accurate, per the table above). No live row was re-run: no code path changed at all, so there is nothing a live call could newly exercise or newly break; this reasoning is stated here per instruction rather than the rows being silently skipped.
+
+### Gates
+
+`cargo fmt --check` → exit 0, no diff. `cargo clippy --all-targets --all-features -- -D warnings` → exit 0, clean. `cargo test --all-targets --all-features -- --test-threads=1` → exit 0, **353 passed, 0 failed, 0 ignored** — unchanged from iteration 6, as expected for a documentation-only change.
+
+### Spec version
+
+Bumped 0.2.10 → **0.2.11**, new revision ID **R-34**, dated 2026-08-05 (the first entry in this loop not dated 2026-08-04, reflecting the actual date change rather than folding it into the same-day count). Judgment: although every individual change is prose-only, both the Codex-flagged findings and the two sweep-discovered instances correct *normative* claims — §7.2's "How these are guaranteed" and §20's Acceptance Criteria are load-bearing specification text, not narrative color, and this document's own established practice (R-30 finding 5, R-31's full prose sweep) has consistently given a prose correction affecting normative safety claims its own revision ID rather than treating it as beneath the threshold for one.
+
+### Scope discipline
+
+`docs/2026-07-28-llm-wikis-external-query-design.md` (§7.2, §20, 0.2.10→0.2.11, R-34), `docs/llm-wikis.md` (§2.8, §3.4 layer 7), and this checkpoint were touched. No `src/*.rs` file was touched (the sweep found every doc comment in `src/` already accurate; see table above). No test file was touched (no behavior changed, so no test needed adding, changing, or could legitimately have been weakened). `docs/verification/llm-wikis-v0.1.0-checklist.md` was **not** touched (independent verifier's artifact, unaffected). Nothing under `D:\Wikis` was written — no live call was made this iteration (see "No code changes; no live rows" above).
+
+## Review loop iteration 8 (Codex eighth review — iteration-7 items confirmed resolved, whole-PR regression clean; one real code bug plus two prose findings, 2026-08-05)
+
+- completed_utc: 2026-08-05T00:00:00Z
+- commits: (recorded below once made)
+- worker: task15-docs-live-worker-2026-08-04-replacement (same replacement worker as iterations 5-7); Codex (PR #1 diff review, iteration 8: iteration-7 findings A/B confirmed resolved, a whole-PR regression sweep clean, plus 1 real code bug + 2 prose findings, one of which was a correction to this checkpoint's own iteration-7 text); coordinator (relayed Codex's verdict and all three findings)
+- result: PASS
+
+### Codex's iteration-8 verdict
+
+Both iteration-7 findings (the mutation-snapshot completeness overclaim; the "before any provider call" imprecision) confirmed resolved. A regression sweep across the whole PR — not just the two changed sentences — came back clean: no new issue in the already-fixed R-27 through R-34 surface. Three new findings this round, one a real code bug.
+
+**On iteration 7's "now exhausted" framing**: iteration 7's checkpoint section stated the sweep's result as "a bounded, now-exhausted result for this specific defect class." Codex's own pass in this same iteration found finding 2 below — a third instance of a closely related defect (an over-strong mechanical-enforcement claim, not the identical "detects any mutation regardless" sentence, but the same family: prose asserting more certainty than the code delivers) that the iteration-7 sweep did not catch, because its grep-and-triage method looked for absolute-quantifier words and a mutation/detection/scope claim near them, and finding 2's sentence ("enforced mechanically... not by the prompt") uses neither "any/all/every/always/never/regardless" *and* makes its overclaim through a structural framing (lumping four items of different actual guarantee strength under one blanket "mechanically enforced" label) rather than a totality word. That is a real gap in the iteration-7 method, not a false "exhausted" claim about the specific word-list swept — but claiming any sweep result as "exhausted" invites exactly this kind of disproof, and per instruction this checkpoint does not repeat that framing: what follows is a description of what was found and fixed this iteration, with no claim about whether the broader pattern is now exhausted. That judgment is left to the reviewer.
+
+### Finding 1 (REAL CODE BUG, accepted, fixed first per instruction) — spawn-failure path silently dropped the enabledPlugins signal
+
+`ClaudeAdapter::invoke` (`src/providers/claude.rs`) captures `claude_enabled_plugins_declared` from the authoritative `check_claude_wiki_settings_surface` call, then attempts `runner.run(...)`. The `Err` arm of that match routed through `no_child_outcome(e)` — the same helper used by the *other* three `no_child_outcome` call sites earlier in the function, all of which run *before* the settings check and correctly default the flag to `false` there (nothing has determined it yet). This fourth site runs *after* the check, so routing it through the same unconditional-`false` helper silently reverted an already-`true` value. Net effect: a wiki whose settings genuinely declare `enabledPlugins`, queried when the provider spawn itself fails for any reason (executable resolution race, OS-level spawn error), would get a failure envelope with the `CLAUDE_ENABLED_PLUGINS_DECLARED` warning missing — exactly the class of gap R-33 (iteration 6, finding B) fixed on the success path, reintroduced here on the error path the iteration-6 fix never touched.
+
+**Fix**: that one call site now constructs `InvokeOutcome` directly (`model_result: Err(e), child_exit_code: None, raw_format: None, diagnostics: Vec::new(), claude_enabled_plugins_declared` — the last field carrying the already-computed value) instead of delegating to `no_child_outcome`. The other three `no_child_outcome` call sites in the same function are correctly left unchanged — they run before the check, where `false` is the right answer because nothing has been determined yet.
+
+**TDD, genuine red run**: a new test, `spawn_failure_after_authoritative_check_still_reports_enabled_plugins_declared` (`tests/claude_adapter.rs`), builds a fixture whose `.claude/settings.local.json` declares `enabledPlugins`, queues a simulated spawn failure (`Err(AppError::new(ErrorCode::InternalError, ...))`) on the `FakeProcessRunner`, calls `ClaudeAdapter::invoke` directly, and asserts both that the failure surfaces (`model_result.is_err()`) and that `claude_enabled_plugins_declared` is still `true`. Run against the pre-fix code (`src/providers/claude.rs` reverted via `git stash push` on that one file, the new test left in place, restored afterward and confirmed identical via `git status`), it failed exactly as predicted:
+
+```text
+thread 'spawn_failure_after_authoritative_check_still_reports_enabled_plugins_declared' panicked:
+the authoritative settings check already found enabledPlugins declared before the spawn was
+attempted -- a subsequent spawn failure must not silently revert that back to false
+```
+
+Restored via `git stash pop`, re-ran: passed. No test was weakened — wholly new test, no existing assertion changed.
+
+### Finding 2 (IMPORTANT, prose — normative-claim precision) — "mechanically enforced" overstated for model-behavior items
+
+Spec §7.2's "How these are guaranteed" paragraph said items 5-8 (omit answer-saving offers; never regenerate the index; never write; never attempt mutation through any tool) are "enforced **mechanically by the harness, not by the prompt**." True in effect for 6-8: the harness's write-prevention (no Write/Edit/Bash/web tool under Claude; Codex's read-only sandbox) means such an attempt cannot succeed regardless of the model, and §12's snapshot detects one that nonetheless lands. Not true for item 5: omitting an answer-saving *offer* is text the model chooses to produce or not, and the harness has no mechanism to prevent or detect that choice at all — there is no tool call to block and nothing written to a snapshot to catch. The paragraph's own next sentence already conceded a skill "may attempt to [save], fail against the harness, and return a degraded answer," which is in tension with "enforced mechanically... not by the prompt" stated two sentences earlier without qualification. Fixed: rewritten to state the real, narrower guarantee — an attempt cannot succeed, and one that lands is detected (items 6-8) — versus item 5's genuinely different, weaker guarantee (no mechanical backstop at all, prompt-instructed only). The identical correction was applied to §20's parallel Acceptance Criteria bullet ("query does not regenerate an index, save an answer, update a log, or modify wiki content"), which made the same blanket claim.
+
+### Finding 3 (MINOR, broken cross-reference) — "§7.2 item 17" does not exist
+
+The 0.2.11/R-34 correction to §20's "no file is created/modified/deleted" bullet (written by this same replacement worker, the previous iteration) cited "§7.2 item 17." §7.2's `external-readonly` behavior list has exactly nine items (1-9). The claim the citation was actually pointing at — "`llm-wikis` never writes to a knowledge base, it has no command that does" — is §4's Design Decision 17, a different section entirely. Fixed to cite §4 correctly.
+
+**Full cross-reference audit, as instructed**: every `§N`/`§N.M` token in the specification was extracted and checked against the document's actual heading list (§1 through §23, including the two tombstoned-but-retained §6.5/§9 headings) — all resolve. Every `item N` token was checked against its citing section's actual item range (§7.2 has 1-9; the two "item 17" citations, in §20's original text and the finding-3 fix, both now correctly point elsewhere or nowhere near §7.2). Every `R-N` token referenced anywhere in the specification (`R-01` through `R-34` before this iteration's `R-35`) was checked against the `| R-N |` rows actually present in §23 — every reference has a matching row and every row is referenced at least once in its own entry; no orphan or dangling ID. The two `§2.8`/`§3.4` tokens that appear in R-34's own row are explicitly prefixed "operator guide" in the surrounding prose, correctly disambiguating them from this specification's own (different) numbering — not a bug, confirmed by re-reading the row in context. The one broken reference (finding 3) was the only defect this audit found.
+
+### Gates
+
+`cargo fmt --check` → exit 0, no diff. `cargo clippy --all-targets --all-features -- -D warnings` → exit 0, clean. `cargo test --all-targets --all-features -- --test-threads=1` → exit 0, **354 passed, 0 failed, 0 ignored** across 21 test binaries (353 from before this iteration + 1 net new: `spawn_failure_after_authoritative_check_still_reports_enabled_plugins_declared`). `cargo test --test spec_drift` re-run in isolation and passing (unaffected by findings 2/3 — neither touched the three normative tables that test parses).
+
+### Live rows: not re-run, reasoning stated
+
+Finding 1 is an error path fix with no change to argv construction, the allowlist, or what gets enforced — only to which `InvokeOutcome` value a spawn *failure* carries, mirroring the reasoning already accepted for R-33's analogous success-path fix (iteration 6). Findings 2 and 3 are documentation-only. No code path a live call could newly exercise changed in a way relevant to provider behavior; this reasoning is stated here per instruction rather than the rows being silently skipped.
+
+### Spec version
+
+Bumped 0.2.11 → **0.2.12**, new revision ID **R-35**, bundling all three findings (a real code fix plus two prose corrections, reviewed and gated together). Judgment: finding 1 alone would warrant a version bump on its own (a genuine behavioral fix to a previously-shipped revision's own mechanism, same category as R-33); finding 2 corrects normative text in §7.2 and §20, consistent with this document's practice of giving normative-claim prose corrections their own revision ID (R-30 finding 5, R-31's sweep, R-34). Finding 3 (the broken cross-reference) is bundled in rather than given its own ID since it is a same-iteration correction to text this very revision chain introduced one version earlier, not an independent finding against previously-stable text.
+
+### Scope discipline
+
+`src/providers/claude.rs` (finding 1's fix), `tests/claude_adapter.rs` (finding 1's new test, `AppError` import added), `docs/2026-07-28-llm-wikis-external-query-design.md` (§4, §7.2, §20, 0.2.11→0.2.12, R-35), and this checkpoint were touched. `docs/llm-wikis.md` was **not** touched this iteration (no finding concerned the operator guide directly). `src/providers/mod.rs`, `src/providers/codex.rs`, `src/query.rs`, `src/config.rs`, `src/doctor.rs` were **not** touched (finding 1 was isolated to the one buggy call site in `claude.rs`; Codex has no equivalent `claude_enabled_plugins_declared` concept to have the same bug). `docs/verification/llm-wikis-v0.1.0-checklist.md` was **not** touched (independent verifier's artifact, unaffected). Nothing under `D:\Wikis` was written — no live call was made this iteration (see "Live rows: not re-run" above). No test was weakened: the one new test is strictly additive and directly pins a real, previously-silent regression.
+
+## Review loop iteration 9 (Codex ninth review — code verified clean arm-by-arm; five prose findings, restructured instead of patched, 2026-08-05)
+
+- completed_utc: 2026-08-05T00:00:00Z
+- commits: (recorded below once made)
+- worker: task15-docs-live-worker-2026-08-04-replacement (same replacement worker as iterations 5-8); Codex (PR #1 diff review, iteration 9: R-35 finding 1's fix verified arm-by-arm, whole-PR regression PASS, plus 5 prose findings — 3 IMPORTANT, 2 MINOR); coordinator (relayed Codex's verdict, all five findings, and the instruction to restructure rather than patch again)
+- result: PASS
+
+### Codex's iteration-9 verdict
+
+R-35's finding-1 fix (the spawn-failure path preserving `claude_enabled_plugins_declared`) was verified arm-by-arm: the spawn-failure, termination/timeout, nonzero-exit, success, and parse-failure paths in `ClaudeAdapter::invoke` all correctly carry the authoritative boolean through; the three remaining `no_child_outcome` call sites (temp-root resolution, temp-artifact creation, and the settings check's own `Err`) all run before the check, where `false` is correct; the new regression test was confirmed non-vacuous (it genuinely exercises the failure path, not a trivially-true assertion). A whole-PR regression sweep came back clean — no new code issue anywhere. Every remaining finding was prose: five of them, three IMPORTANT, all recognizable members of the same overclaim family that R-30 finding 5, R-31's sweep, R-34, and R-35 finding 2 had each independently found and fixed across the prior seven review rounds, always in a different sentence.
+
+### The five findings
+
+1. **IMPORTANT — spec §20's item-5 correction was itself still wrong.** R-35 (iteration 8) had rewritten the bullet to say "saving an answer or claiming to have mutated something is prompt-instructed model behavior with no mechanical prevention of the attempt itself (§7.2 item 5)" — but §7.2 item 5 is specifically "omit answer-saving offers," not "saving an answer" (an actual write attempt, covered by items 6-8's tool-absence prevention) and not "claiming mutation" (a different behavior — a false statement in the answer text — that item 5 does not name at all and that has no itemized coverage anywhere). The correction had fixed the "mechanically enforced" overclaim while introducing a new, narrower miscitation in the same sentence.
+2. **IMPORTANT — operator guide §3.6 said "neither [provider] can write anywhere,"** flatly contradicting the managed-hook and check-to-spawn TOCTOU residuals stated honestly a few sections away (§3.4 layers 8-9, §3.10 now). An absolute claim and its own document's stated exceptions cannot both be true.
+3. **IMPORTANT — operator guide §3.6 also said equal `project_root`/`content_root` roots make Claude's read reach "genuinely... exactly `content_root`."** True only for the configuration surface this project actually inspects. `check_claude_wiki_settings_surface` reads the *wiki's own* project/local settings; it has no way to read, and does not attempt to read, the *operator's own* `~/.claude/settings.json`. A `permissions.allow` rule configured there — entirely the operator's own doing, on their own machine — could still pre-authorize Claude's `Read` tool for a path outside `content_root`, independent of whether the wiki's roots are equal. Per the coordinator's own framing: this is an accuracy defect in what the warning's absence certifies, not a vulnerability — user-scope settings are the operator's own trusted configuration, not something a wiki or a caller can reach.
+4. **MINOR — `tests/config_contract.rs`'s header comment (line ~915)** still described `permissions.{allow,deny,defaultMode}` as admitted alongside `enabledPlugins`. That was true under R-29; R-30 removed `permissions` entirely. The comment had not been updated since.
+5. **MINOR — `src/providers/mod.rs`'s `InvokeOutcome` doc comment (line ~182)** said `claude_enabled_plugins_declared` is `false` "whenever no child ran" — true when it was written (iteration 6), false the moment R-35's own fix shipped (iteration 8): a spawn failure is "no child ran" in the literal sense, and after R-35 the field can still be `true` on that path. Left as written, this comment would have pointed a future refactor straight back into the bug R-35 just fixed.
+
+### The restructuring, not another patch
+
+Per instruction, this iteration did not fix these five findings as five more isolated sentence edits. `docs/llm-wikis.md` gained a new §3.10, **"The complete safety picture (canonical reference)"** — one section, organized exactly as specified:
+
+- **(a) Mechanically prevented** — a table of ten entries, each naming the specific mechanism (the `--tools` restriction, the Codex sandbox, the settings allowlist, `--settings {"disableAllHooks":true}`, the empty MCP configuration, `--ignore-user-config`, Codex's own trust-gating design, canonical-path/special-entry rejection, the output schema, stdin-only transport).
+- **(b) Instructed, and backstopped by detection if the instruction fails** — spec §7.2 items 6-8, with the snapshot named as the detection backstop and its exact coverage limit stated (excludes `.claude`/`.agents` when they are immediate children of `content_root`).
+- **(c) Not covered** — six entries stated directly rather than left to be inferred: admin-managed/enterprise-policy hooks; the check-to-spawn TOCTOU window; the operator's own user-scope Claude settings (finding 3, above); `enabledPlugins`'s risk-acceptance admission; read reach beyond `content_root` (a confidentiality, not write-safety, gap); and a model's own false claims in its answer text (finding 1, above — this is where "offering to save" versus "claiming to have mutated something" now actually live, correctly distinguished).
+
+The operator guide is the canonical document (this worker's own call, stated per instruction): it is what an operator actually reads for the security model, and it is where five of the last seven findings landed. The specification's §7.2 "How these are guaranteed" paragraph and both flagged §20 bullets were rewritten to state only what is narrowly true standing alone and to point at operator guide §3.10 for the complete, item-by-item breakdown — the specification **deliberately no longer restates that breakdown**, since restating it twice is exactly what let the two copies drift out of sync repeatedly (R-34's fix landed in the operator guide *and* separately in the spec; R-35's fix then had to fix the spec's copy again; this iteration's finding 1 was a *second* wrong restatement of the same idea in the spec's own §20). Existing sections that were already narrow and accurate (§2.8, §3.5) gained a one-line pointer to §3.10 rather than a rewrite. Findings 4 and 5 were fixed as direct, narrow corrections at their own locations (a test comment and a struct doc comment) — nothing about them called for restructuring, only accuracy.
+
+**On "exhausted"**: per instruction, this section does not claim the underlying overclaim pattern is now exhausted, in either the old (repeat-the-word) or a new (imply the restructuring definitely fixes the class) form. What can be stated is what changed: there is now one place or a pointer to it, rather than N independent restatements, which structurally reduces how many places a future correction has to update — that claim is about the *documentation's structure*, not about whether every sentence in it is now perfectly precise. Whether it holds is left to the next review, as instructed.
+
+### Gates
+
+`cargo fmt --check` → exit 0, no diff (after one `cargo fmt` pass). `cargo clippy --all-targets --all-features -- -D warnings` → exit 0, clean. `cargo test --all-targets --all-features -- --test-threads=1` → exit 0, **354 passed, 0 failed, 0 ignored** — unchanged from iteration 8, as expected: no test logic was touched (findings 4/5 are comment-only; the rest is documentation). `cargo test --test spec_drift` re-run in isolation and passing (unaffected — none of the three normative tables it parses were touched).
+
+### Live rows: not re-run, reasoning stated
+
+Findings 1-3 and the restructuring are entirely `docs/llm-wikis.md` and `docs/2026-07-28-llm-wikis-external-query-design.md` prose. Finding 4 is a test file comment (no assertion changed). Finding 5 is a doc comment on an already-shipped, already-tested struct field — no behavior changed. No code path relevant to a live provider call was touched; this reasoning is stated here per instruction rather than the rows being silently skipped.
+
+### Spec version
+
+Bumped 0.2.12 → **0.2.13**, new revision ID **R-36**, bundling all five findings with the restructuring (they were found, fixed, and gated together, and findings 1-3 are precisely what the restructuring was designed to make impossible to keep happening piecemeal). Judgment: this is a substantive, normative-surface change — a new canonical section plus edits to §7.2 and §20's actual guarantees — squarely within this document's established practice of giving a normative-claim correction its own revision ID (R-30 finding 5, R-31, R-34, R-35).
+
+### Scope discipline
+
+`docs/llm-wikis.md` (new §3.10; §2.8, §3.5, §3.6 corrected or pointed at it), `docs/2026-07-28-llm-wikis-external-query-design.md` (§7.2, §20 simplified to point at operator guide §3.10; §4, 0.2.12→0.2.13, R-36), `tests/config_contract.rs` (finding 4, comment only), `src/providers/mod.rs` (finding 5, doc comment only), and this checkpoint were touched. No test assertion was added, changed, or removed anywhere in this iteration — findings 4 and 5 are comment-only, and the rest is documentation, so nothing was at risk of being weakened. `docs/verification/llm-wikis-v0.1.0-checklist.md` was **not** touched (independent verifier's artifact, unaffected). Nothing under `D:\Wikis` was written — no live call was made this iteration (see "Live rows: not re-run" above).

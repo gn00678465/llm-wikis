@@ -65,13 +65,15 @@ pub enum WrapperWarningCode {
     WikiSchemaAbsent,
     ClaudeReadScopeBroad,
     CodexReadScopeBroad,
+    ClaudeEnabledPluginsDeclared,
 }
 
 impl WrapperWarningCode {
-    pub const ALL: [WrapperWarningCode; 3] = [
+    pub const ALL: [WrapperWarningCode; 4] = [
         WrapperWarningCode::WikiSchemaAbsent,
         WrapperWarningCode::ClaudeReadScopeBroad,
         WrapperWarningCode::CodexReadScopeBroad,
+        WrapperWarningCode::ClaudeEnabledPluginsDeclared,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -79,6 +81,7 @@ impl WrapperWarningCode {
             WrapperWarningCode::WikiSchemaAbsent => "WIKI_SCHEMA_ABSENT",
             WrapperWarningCode::ClaudeReadScopeBroad => "CLAUDE_READ_SCOPE_BROAD",
             WrapperWarningCode::CodexReadScopeBroad => "CODEX_READ_SCOPE_BROAD",
+            WrapperWarningCode::ClaudeEnabledPluginsDeclared => "CLAUDE_ENABLED_PLUGINS_DECLARED",
         }
     }
 }

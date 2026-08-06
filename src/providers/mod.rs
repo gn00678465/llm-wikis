@@ -171,6 +171,32 @@ pub struct InvokeOutcome {
     /// Not surfaced by the public envelope today; carried through for
     /// doctor/live-check reuse (Task 11).
     pub diagnostics: Vec<String>,
+    /// Claude only (always `false` for Codex): whether the *authoritative*
+    /// pre-spawn `check_claude_wiki_settings_surface` call inside
+    /// `ClaudeAdapter::invoke` found the wiki's settings declaring
+    /// `enabledPlugins` (spec §13 R-32/R-33, PR #1 Codex review iteration 6
+    /// finding B). Exists so `QueryService` can drive the
+    /// `CLAUDE_ENABLED_PLUGINS_DECLARED` warning from the one check whose
+    /// result is actually authoritative, rather than a separate early read
+    /// that could observe a different (stale) filesystem state and
+    /// silently omit the warning the operator needs.
+    ///
+    /// **What makes this `false`, precisely** (PR #1 Codex review iteration
+    /// 8 finding 1 corrected an earlier, wrong version of this sentence
+    /// that said "`false` whenever no child ran" -- that stopped being true
+    /// the moment the fix for that same finding shipped): `false` whenever
+    /// the authoritative check has not yet run, or ran and returned an
+    /// `Err` (the wiki is rejected outright as a query failure, before this
+    /// field would ever matter). Once that check has run and returned
+    /// `Ok`, its value is carried through **every** subsequent
+    /// `ClaudeAdapter::invoke` outcome, success or failure alike --
+    /// including a spawn failure, where "no child ran" is true but this
+    /// field is not `false` on that account alone. A future refactor must
+    /// not reintroduce the shortcut "no child ran implies `false`": three
+    /// of the four `no_child_outcome` call sites in `ClaudeAdapter::invoke`
+    /// run *before* the check and correctly default to `false` there; the
+    /// fourth (the spawn attempt itself) runs *after* it and must not.
+    pub claude_enabled_plugins_declared: bool,
 }
 
 /// The outcome for a failure before any child process ever ran (temp-
@@ -181,6 +207,7 @@ pub fn no_child_outcome(err: AppError) -> InvokeOutcome {
         child_exit_code: None,
         raw_format: None,
         diagnostics: Vec::new(),
+        claude_enabled_plugins_declared: false,
     }
 }
 
@@ -423,14 +450,21 @@ pub fn build_prompt(
 /// crate — no schema-generation dependency exists in `Cargo.toml` and this
 /// task cannot add one (root `Cargo.toml` is off-limits). Five fields, add a
 /// generator if the shape grows enough to make hand-sync error-prone.
+///
+/// Every `properties` entry must carry an explicit `"type"` key, even when a
+/// `const`/`enum` already constrains it. Claude's `--json-schema` tolerates a
+/// `const`/`enum`-only property; OpenAI's structured-output validator behind
+/// Codex's `--output-schema` does not and rejects the whole request with a
+/// 400 `invalid_json_schema` error before any model work happens (confirmed
+/// live: `docs/verification/llm-wikis-execution.md` Task 15, LIVE-02).
 pub fn result_json_schema() -> String {
     let schema = serde_json::json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["contract", "knowledge_status", "answer", "citations", "gaps", "warnings"],
         "properties": {
-            "contract": { "const": CONTRACT },
-            "knowledge_status": { "enum": ["grounded", "no_relevant_material"] },
+            "contract": { "type": "string", "const": CONTRACT },
+            "knowledge_status": { "type": "string", "enum": ["grounded", "no_relevant_material"] },
             "answer": { "type": "string", "minLength": 1 },
             "citations": { "type": "array", "items": { "type": "string" } },
             "gaps": { "type": "array", "items": { "type": "string" } },

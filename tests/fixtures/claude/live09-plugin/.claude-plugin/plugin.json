@@ -1,0 +1,5 @@
+{
+  "name": "fixture-tools",
+  "version": "0.1.0",
+  "description": "Task 15 LIVE-09 fixture plugin: proves a Claude local-plugin entrypoint is configuration, not a product constant. Contains exactly one skill and no hooks, MCP servers, or settings."
+}

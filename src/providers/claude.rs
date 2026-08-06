@@ -40,8 +40,54 @@ pub fn read_scope_broad_warning(project_root: &Path, content_root: &Path) -> Opt
     }
 }
 
+/// The `--settings` value that neutralizes every hook declared by user,
+/// project, local, or `--plugin-dir` settings, for this session (spec §10.2
+/// R-27; PR #1 Codex review finding 1). CLI-supplied `--settings` outranks
+/// user/project/local settings, so this holds even for the operator's own
+/// trusted `~/.claude` settings, the wiki's own (loaded) project/local
+/// settings, or a configured local plugin. **It does not reach an
+/// admin-managed/enterprise-policy hook** (PR #1 Codex review iteration 6
+/// finding A: an earlier version of this comment said "regardless of
+/// source" without this exception, self-contradicting the honest residual
+/// gap stated elsewhere) — no CLI flag or static check in this project
+/// disables that class of hook; see spec §10.2/§12's own "Honest residual
+/// gap" text.
+pub const DISABLE_ALL_HOOKS_SETTINGS: &str = "{\"disableAllHooks\":true}";
+
 /// Builds the exact Claude argv vector (spec §10.2). Never includes the
 /// entrypoint or `query_prompt` — those exist only in the stdin prompt.
+///
+/// **Threat this argv's `--settings` flag defends against (spec §10.2
+/// R-27)**: `invoke`'s child cwd is the wiki's own `project_root`, an
+/// untrusted operator-controlled directory this wrapper does not own. Claude
+/// Code's `-p` mode auto-loads that directory's `.claude/settings.json` /
+/// `settings.local.json` and **runs any hooks they declare** (SessionStart,
+/// PreToolUse, ...) as arbitrary shell — entirely outside the `--tools
+/// Read,Grep,Glob` gate, which restricts only built-in tools, not hook
+/// commands. [`DISABLE_ALL_HOOKS_SETTINGS`] disables every hook declared by
+/// those settings sources — see its own doc comment for the admin-managed/
+/// enterprise-policy exception this does **not** reach. `--setting-sources
+/// user` was tried instead/in addition (R-27) and reverted (R-28) — it also
+/// excludes the `project` setting source that Claude's project-skill
+/// discovery itself depends on, breaking every `project_skill`-load-mode
+/// wiki's entrypoint; it is **not** used here.
+///
+/// **This argv alone is not the trust boundary — do not read it as one.**
+/// `--settings`/`--strict-mcp-config`/`--tools` bound hooks, MCP, and the
+/// built-in tool surface respectively, but several documented settings keys
+/// neither hook- nor tool-shaped still execute a command or widen reach on
+/// their own (`apiKeyHelper`, confirmed live to execute even with hooks
+/// disabled — `docs/verification/llm-wikis-execution.md` Task 15 "review
+/// loop iteration 3"). The load-bearing gate for that is
+/// [`crate::config::check_claude_wiki_settings_surface`] (spec §12/§15
+/// R-29/R-30/R-31), a **separate function**, the single source of truth,
+/// called both from static `doctor` and from `ClaudeAdapter::invoke`
+/// immediately before the child is spawned — see that call site's own
+/// comment for exactly where and why, and the function's own doc comment
+/// for the full current allowlist and its honestly-stated TOCTOU residual.
+/// This comment intentionally does not restate either, to avoid the two
+/// going out of sync the way an earlier version of this comment did (PR #1
+/// Codex review iteration 5 findings 4-6).
 pub fn build_argv(
     content_root: &Path,
     mcp_config_path: &Path,
@@ -66,6 +112,8 @@ pub fn build_argv(
         OsString::from("json"),
         OsString::from("--json-schema"),
         OsString::from(json_schema),
+        OsString::from("--settings"),
+        OsString::from(DISABLE_ALL_HOOKS_SETTINGS),
     ];
     if let Some(dir) = plugin_dir {
         args.push(OsString::from("--plugin-dir"));
@@ -147,10 +195,22 @@ pub fn parse_claude_output(
     Ok((result, RawFormat::ClaudeJson))
 }
 
+/// The real Claude CLI's `auth status --json` field name has drifted at
+/// least once in the field (2.1.220 emits `loggedIn`; older/other
+/// documentation names it `authenticated`) — both are accepted so this check
+/// does not fail closed purely on field-name drift across CLI versions.
 #[derive(Debug, Deserialize)]
 struct ClaudeAuthStatusDocument {
     #[serde(default)]
     authenticated: Option<bool>,
+    #[serde(default, rename = "loggedIn")]
+    logged_in: Option<bool>,
+}
+
+impl ClaudeAuthStatusDocument {
+    fn is_authenticated(&self) -> Option<bool> {
+        self.authenticated.or(self.logged_in)
+    }
 }
 
 /// The Claude provider adapter (spec §10.2).
@@ -230,7 +290,7 @@ impl ProviderAdapter for ClaudeAdapter {
                 "claude auth status output was not valid JSON",
             )
         })?;
-        match parsed.authenticated {
+        match parsed.is_authenticated() {
             Some(true) => Ok(AuthStatus::Authenticated),
             Some(false) => Err(AppError::new(
                 ErrorCode::AuthRequired,
@@ -238,7 +298,7 @@ impl ProviderAdapter for ClaudeAdapter {
             )),
             None => Err(AppError::new(
                 ErrorCode::InvalidNativeOutput,
-                "claude auth status output was missing the authenticated field",
+                "claude auth status output was missing both the authenticated and loggedIn fields",
             )),
         }
     }
@@ -271,6 +331,37 @@ impl ProviderAdapter for ClaudeAdapter {
             &schema,
             request.plugin_dir.as_deref(),
         );
+        // R-31 (PR #1 Codex review iteration 5 finding 3): the wiki-settings
+        // surface check is the genuinely last thing before the child is
+        // spawned -- after plugin-dir canonicalization, temp-dir/temp-file
+        // creation, and argv/schema construction, none of which need to
+        // precede it, and immediately before the one `runner.run` call that
+        // actually starts the untrusted wiki's provider process. One
+        // function, `crate::config::check_claude_wiki_settings_surface`, is
+        // the single source of truth -- also called, unchanged, from static
+        // `doctor` (`src/doctor.rs::entrypoint_check`) -- not duplicated.
+        // This is a narrowing of the check-to-spawn window to the syscall
+        // gap between this check returning and `runner.run` actually
+        // executing `Command::spawn` -- **not a closure of that window**;
+        // see the doc comment on `check_claude_wiki_settings_surface`.
+        //
+        // R-33 (PR #1 Codex review iteration 6 finding B): this call's
+        // `Ok(bool)` used to be discarded (`if let Err(e) = ...`), which was
+        // fine for enforcement (the `Err` path was already handled) but
+        // silently dropped the one authoritative signal for whether
+        // `CLAUDE_ENABLED_PLUGINS_DECLARED` should fire -- `QueryService`
+        // separately re-read the same check *earlier*, before the version/
+        // auth probes, so a wiki whose settings started declaring
+        // `enabledPlugins` only between that earlier read and this
+        // authoritative one would spawn with the warning silently missing.
+        // Capturing the boolean here and carrying it through `InvokeOutcome`
+        // makes this call the single source for both enforcement and the
+        // warning -- there is no longer any earlier read to go stale.
+        let claude_enabled_plugins_declared =
+            match crate::config::check_claude_wiki_settings_surface(&request.project_root) {
+                Ok(declares) => declares,
+                Err(e) => return no_child_outcome(e),
+            };
         let outcome = match runner.run(ProcessRequest {
             executable: request.executable.clone(),
             args,
@@ -282,7 +373,25 @@ impl ProviderAdapter for ClaudeAdapter {
             cancel: None,
         }) {
             Ok(o) => o,
-            Err(e) => return no_child_outcome(e),
+            // PR #1 Codex review iteration 8 finding 1: `no_child_outcome`
+            // unconditionally sets `claude_enabled_plugins_declared: false`,
+            // which is correct for the three call sites above (none of them
+            // have run the authoritative check yet) but was wrong here --
+            // the check above already ran and determined this wiki's
+            // settings declare `enabledPlugins`; a spawn failure at this
+            // point must not silently revert that back to `false` and drop
+            // the warning the operator was promised. Construct the outcome
+            // directly instead of delegating to `no_child_outcome`, so the
+            // already-authoritative boolean survives this failure path too.
+            Err(e) => {
+                return InvokeOutcome {
+                    model_result: Err(e),
+                    child_exit_code: None,
+                    raw_format: None,
+                    diagnostics: Vec::new(),
+                    claude_enabled_plugins_declared,
+                };
+            }
         };
         let child_exit_code = outcome.exit_code;
         if let Err(e) = map_termination(
@@ -295,6 +404,7 @@ impl ProviderAdapter for ClaudeAdapter {
                 child_exit_code,
                 raw_format: None,
                 diagnostics: Vec::new(),
+                claude_enabled_plugins_declared,
             };
         }
         if let Err(e) = map_nonzero_exit(&outcome) {
@@ -303,6 +413,7 @@ impl ProviderAdapter for ClaudeAdapter {
                 child_exit_code,
                 raw_format: None,
                 diagnostics: Vec::new(),
+                claude_enabled_plugins_declared,
             };
         }
         match parse_claude_output(&outcome.stdout) {
@@ -311,12 +422,14 @@ impl ProviderAdapter for ClaudeAdapter {
                 child_exit_code,
                 raw_format: Some(raw_format),
                 diagnostics: Vec::new(),
+                claude_enabled_plugins_declared,
             },
             Err(e) => InvokeOutcome {
                 model_result: Err(e),
                 child_exit_code,
                 raw_format: None,
                 diagnostics: Vec::new(),
+                claude_enabled_plugins_declared,
             },
         }
     }

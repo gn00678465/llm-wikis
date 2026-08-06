@@ -268,7 +268,14 @@ impl ProviderAdapter for CodexAdapter {
         ))?;
         map_termination(&outcome, 65_536, 65_536)?;
         let stdout = String::from_utf8_lossy(&outcome.stdout);
-        match classify_login_status(&stdout) {
+        // Real codex-cli 0.146.0 writes its human-readable login-status line
+        // to stderr, with empty stdout — stdout is still checked first (the
+        // documented/originally-observed shape), stderr only as a fallback
+        // when stdout doesn't classify.
+        let stderr = String::from_utf8_lossy(&outcome.stderr);
+        let classification =
+            classify_login_status(&stdout).or_else(|| classify_login_status(&stderr));
+        match classification {
             Some(false) => Err(AppError::new(
                 ErrorCode::AuthRequired,
                 "codex login status reports a logged-out state",
@@ -354,6 +361,7 @@ impl ProviderAdapter for CodexAdapter {
                 child_exit_code,
                 raw_format: None,
                 diagnostics: Vec::new(),
+                claude_enabled_plugins_declared: false,
             };
         }
         if let Err(e) = map_nonzero_exit(&outcome) {
@@ -362,6 +370,7 @@ impl ProviderAdapter for CodexAdapter {
                 child_exit_code,
                 raw_format: None,
                 diagnostics: Vec::new(),
+                claude_enabled_plugins_declared: false,
             };
         }
         match parse_codex_output(&outcome.stdout) {
@@ -374,12 +383,14 @@ impl ProviderAdapter for CodexAdapter {
                     .iter()
                     .map(|signal| format!("{signal:?}"))
                     .collect(),
+                claude_enabled_plugins_declared: false,
             },
             Err(e) => InvokeOutcome {
                 model_result: Err(e),
                 child_exit_code,
                 raw_format: None,
                 diagnostics: Vec::new(),
+                claude_enabled_plugins_declared: false,
             },
         }
     }

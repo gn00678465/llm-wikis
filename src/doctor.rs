@@ -377,6 +377,20 @@ fn entrypoint_check(
     if let Err(e) = validate_entrypoint(agent, &provider.entrypoint) {
         return DoctorCheck::fail(CHECK_ENTRYPOINT, e.code, e.message);
     }
+    // R-29/R-31: Claude's `-p` mode loads project_root/.claude/settings*.json
+    // regardless of trust or load mode; deny any executable/reach-widening
+    // key before ever invoking the provider (see the function doc for the
+    // full threat and the allowlist rationale). `Ok(true)` means the
+    // settings passed but declared `enabledPlugins` (R-32) -- advisory, not
+    // a failure; surfaced as a warning on this same check below rather than
+    // failing it.
+    let mut declares_enabled_plugins = false;
+    if agent == Agent::Claude {
+        match crate::config::check_claude_wiki_settings_surface(project_root) {
+            Ok(declares) => declares_enabled_plugins = declares,
+            Err(e) => return DoctorCheck::fail(CHECK_ENTRYPOINT, e.code, e.message),
+        }
+    }
     if provider.load == crate::config::LoadMode::LocalPlugin
         && let Some(plugin_dir_str) = provider.plugin_dir.as_deref()
     {
@@ -388,6 +402,11 @@ fn entrypoint_check(
         }
     }
     match resolve_and_check_artifact(config_dir, project_root, provider) {
+        Ok(()) if declares_enabled_plugins => DoctorCheck::warn(
+            CHECK_ENTRYPOINT,
+            crate::output::WrapperWarningCode::ClaudeEnabledPluginsDeclared.as_str(),
+            crate::config::CLAUDE_ENABLED_PLUGINS_DECLARED_MESSAGE,
+        ),
         Ok(()) => DoctorCheck::pass(
             CHECK_ENTRYPOINT,
             "Configured project skill or local plugin artifact is statically addressable.",

@@ -10,12 +10,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use llm_wikis::error::ErrorCode;
+use llm_wikis::error::{AppError, ErrorCode};
 use llm_wikis::output::RawFormat;
 use llm_wikis::process::{ExecutableKind, ResolvedExecutable};
 use llm_wikis::providers::claude::{
-    CLAUDE_READ_SCOPE_BROAD_MESSAGE, ClaudeAdapter, build_argv, parse_claude_output,
-    read_scope_broad_warning,
+    CLAUDE_READ_SCOPE_BROAD_MESSAGE, ClaudeAdapter, DISABLE_ALL_HOOKS_SETTINGS, build_argv,
+    parse_claude_output, read_scope_broad_warning,
 };
 use llm_wikis::providers::{
     FakeProcessRunner, ProviderAdapter, ProviderRequest, completed_outcome,
@@ -159,8 +159,82 @@ fn exact_argv() {
         OsString::from("json"),
         OsString::from("--json-schema"),
         OsString::from(&schema_text),
+        OsString::from("--settings"),
+        // Literal expected string, not `DISABLE_ALL_HOOKS_SETTINGS` (PR #1
+        // Codex review iteration 3 finding 2): pinning against the
+        // production constant only proves internal self-consistency —
+        // flipping the constant to e.g. `{"disableAllHooks":false}` would
+        // keep this assertion green. The literal byte value is what
+        // actually reaches the real `claude` process.
+        OsString::from(r#"{"disableAllHooks":true}"#),
     ];
     assert_eq!(args, expected);
+    // The constant itself must still equal the literal this test pins —
+    // catches the constant and the real argv drifting from each other.
+    assert_eq!(DISABLE_ALL_HOOKS_SETTINGS, r#"{"disableAllHooks":true}"#);
+}
+
+/// Regression test for a review-found vulnerability (PR #1, Codex review
+/// finding 1, `docs/verification/llm-wikis-execution.md` Task 15 "review
+/// loop iteration 1"), **corrected in review loop iteration 2** after a live
+/// four-arm experiment showed the original fix's `--setting-sources user`
+/// broke project-skill discovery itself (every `project_skill`-load-mode
+/// wiki's slash entrypoint resolved to `"Unknown command: /<name>"` instead
+/// of invoking the skill) — `--setting-sources` is **not** used here at all
+/// any more, only `--settings {"disableAllHooks":true}`.
+///
+/// The threat this still defends against: the child's cwd is the wiki's own
+/// `project_root` (`src/providers/claude.rs::invoke`), so Claude Code's `-p`
+/// mode auto-loads that untrusted directory's `.claude/settings.json` /
+/// `settings.local.json` and **runs any hooks they declare** (SessionStart,
+/// PreToolUse, ...) — arbitrary shell, entirely outside the `--tools
+/// Read,Grep,Glob` gate, which restricts only built-in tools, not hook
+/// commands. `.claude/`/`.agents/` immediately under `content_root` are also
+/// excluded from the mutation snapshot (spec §12), so a hook's writes there
+/// are undetectable. `--settings {"disableAllHooks":true}` disables every
+/// hook declared by user, project, or local settings (CLI-supplied
+/// `--settings` outranks all of those) — not an admin-managed/
+/// enterprise-policy hook, which no flag here reaches — while leaving
+/// project/local settings otherwise loaded, so skill discovery still works.
+/// Empirically confirmed live (checkpoint,
+/// iteration 2): with the corrected argv, a project skill resolved and
+/// answered correctly *and* a project-declared `SessionStart` hook on the
+/// same fixture did not fire; a control run with neither flag confirmed the
+/// hook is genuinely live in that fixture.
+#[test]
+fn hook_neutralization_settings_flag_present_without_excluding_setting_sources() {
+    let content_root = Path::new("D:/Wikis/agents");
+    let mcp_config = Path::new("D:/Temp/llm-wikis-xyz/mcp-config.json");
+    let schema_text = schema();
+    let args = build_argv(content_root, mcp_config, &schema_text, None);
+
+    let schema_pos = args.iter().position(|a| a == "--json-schema").unwrap();
+    assert_eq!(
+        args[schema_pos + 2],
+        OsString::from("--settings"),
+        "--settings must directly follow the --json-schema pair, before any optional --plugin-dir"
+    );
+    assert_eq!(
+        args[schema_pos + 3],
+        OsString::from(r#"{"disableAllHooks":true}"#),
+        "literal expected value, not the production constant (iteration 3 finding 2)"
+    );
+    assert!(
+        !args.iter().any(|a| a == "--setting-sources"),
+        "--setting-sources must never appear — it excludes the project setting \
+         source that project-skill discovery itself depends on (review loop iteration 2)"
+    );
+
+    // Even with a local_plugin --plugin-dir, the hook-neutralization flag
+    // still precedes it — a plugin-declared hook is neutralized too.
+    let plugin_dir = Path::new("D:/Wikis/agents/plugins/knowledge-tools");
+    let with_plugin = build_argv(content_root, mcp_config, &schema_text, Some(plugin_dir));
+    let settings_pos = with_plugin.iter().position(|a| a == "--settings").unwrap();
+    let plugin_pos = with_plugin
+        .iter()
+        .position(|a| a == "--plugin-dir")
+        .unwrap();
+    assert!(settings_pos < plugin_pos);
 }
 
 #[test]
@@ -256,6 +330,36 @@ fn json_schema_inline() {
     );
 }
 
+/// Regression test: OpenAI's structured-output validator (codex-cli's
+/// `--output-schema`) rejects any `properties` entry that lacks a `"type"`
+/// key, even when a `const`/`enum` constrains it — confirmed live via a
+/// captured-argv replay (`docs/verification/llm-wikis-execution.md` Task 15,
+/// the LIVE-02 root cause: a 400 `invalid_json_schema` API error, "schema
+/// must have a 'type' key", on `properties.contract`). Claude's `--json-schema`
+/// tolerated the missing `type` (LIVE-01/03/09 all passed against it), which
+/// is why this shared schema — used by both adapters — was never caught
+/// until a real Codex live call hit OpenAI's stricter validator. Every
+/// property must carry `"type"`, `contract`/`knowledge_status` included
+/// alongside their existing `const`/`enum`.
+#[test]
+fn every_result_schema_property_has_a_type_key() {
+    let schema_text = schema();
+    let value: serde_json::Value =
+        serde_json::from_str(&schema_text).expect("result_json_schema is valid JSON");
+    let properties = value["properties"]
+        .as_object()
+        .expect("schema has a properties object");
+    assert!(!properties.is_empty(), "schema must declare properties");
+    for (name, prop) in properties {
+        assert!(
+            prop.get("type").is_some(),
+            "property {name:?} is missing a \"type\" key: {prop}"
+        );
+    }
+    assert_eq!(value["properties"]["contract"]["type"], "string");
+    assert_eq!(value["properties"]["knowledge_status"]["type"], "string");
+}
+
 #[test]
 fn no_prompt_in_argv() {
     let content_root = Path::new("D:/Wikis/agents");
@@ -343,6 +447,49 @@ fn cwd_is_project_root() {
 }
 
 #[test]
+fn spawn_failure_after_authoritative_check_still_reports_enabled_plugins_declared() {
+    // PR #1 Codex review iteration 8 finding 1: `no_child_outcome` unconditionally
+    // sets `claude_enabled_plugins_declared: false` (correct for the three call
+    // sites that run before the authoritative settings check), but the fourth
+    // call site -- the `runner.run` spawn attempt itself -- runs *after* that
+    // check has already determined the wiki's settings declare `enabledPlugins`.
+    // Routing a spawn failure through `no_child_outcome` there silently reverted
+    // an already-`true` value back to `false`, dropping the
+    // `CLAUDE_ENABLED_PLUGINS_DECLARED` warning the operator was promised on
+    // exactly the query that needed it (a failed one, worth investigating).
+    let runner = FakeProcessRunner::new();
+    runner.push_response(Err(AppError::new(
+        ErrorCode::InternalError,
+        "simulated spawn failure",
+    )));
+    let adapter = ClaudeAdapter;
+    let mut request = provider_request(fake_executable());
+    let project_root = scratch_root().join("spawn-failure-enabled-plugins-project-root");
+    fs::create_dir_all(project_root.join(".claude")).unwrap();
+    fs::write(
+        project_root.join(".claude/settings.local.json"),
+        br#"{"enabledPlugins":{"x@y":true}}"#,
+    )
+    .unwrap();
+    request.project_root = project_root.clone();
+    request.content_root = project_root.clone();
+    request.configured_roots = vec![project_root];
+
+    let outcome = adapter.invoke(&runner, request, "test prompt".to_string());
+
+    assert!(
+        outcome.model_result.is_err(),
+        "expected the simulated spawn failure to surface as an error"
+    );
+    assert!(
+        outcome.claude_enabled_plugins_declared,
+        "the authoritative settings check already found enabledPlugins declared before \
+         the spawn was attempted -- a subsequent spawn failure must not silently revert \
+         that back to false"
+    );
+}
+
+#[test]
 fn no_session_persistence_via_invoke() {
     // Re-asserts the argv-level `no_session_persistence` test through a full
     // `invoke` call, proving the flag survives end to end.
@@ -406,4 +553,34 @@ fn auth_status_probe() {
         .auth_status(&runner, &fake_executable())
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::NonzeroExit);
+}
+
+/// Regression test: real Claude CLI 2.1.220's `claude auth status --json`
+/// emits `loggedIn` (verified live, `docs/verification/llm-wikis-execution.md`
+/// Task 15), not the `authenticated` field the parser originally required
+/// exclusively. Both field shapes must be accepted so the check does not fail
+/// closed against a real, current CLI purely on field-name drift, without
+/// dropping support for the `authenticated` shape older fixtures/tests use.
+#[test]
+fn auth_status_probe_accepts_the_real_logged_in_field_shape() {
+    let runner = FakeProcessRunner::new();
+    let adapter = ClaudeAdapter;
+
+    runner.push_response(Ok(completed_outcome(br#"{"loggedIn":true}"#, b"", 0)));
+    adapter
+        .auth_status(&runner, &fake_executable())
+        .expect("loggedIn:true fixture succeeds");
+
+    runner.push_response(Ok(completed_outcome(br#"{"loggedIn":false}"#, b"", 0)));
+    let err = adapter
+        .auth_status(&runner, &fake_executable())
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::AuthRequired);
+
+    // Neither field present: still INVALID_NATIVE_OUTPUT, not a silent pass.
+    runner.push_response(Ok(completed_outcome(br#"{"other":true}"#, b"", 0)));
+    let err = adapter
+        .auth_status(&runner, &fake_executable())
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidNativeOutput);
 }

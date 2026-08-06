@@ -5,6 +5,7 @@
 //! model quota is spent.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -527,6 +528,208 @@ fn validate_before_spawn() {
     assert!(!envelope.ok);
     assert_eq!(envelope.error.unwrap().code, ErrorCode::QuestionTooLarge);
     assert_eq!(envelope.child_exit_code, None);
+}
+
+// ---------------------------------------------------------------------------
+// R-29: query re-runs the wiki-settings surface check, closing the TOCTOU gap
+// between a passing `doctor` run and a later `query` invocation (PR #1 Codex
+// review iteration 3 finding 1). A forbidden key must fail closed here too,
+// strictly before any provider process is spawned -- proven the same way
+// validate_before_spawn above does: zero queued FakeProcessRunner responses,
+// so reaching a real spawn attempt would panic instead of returning an
+// envelope.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn query_rejects_a_forbidden_claude_wiki_settings_key_before_any_spawn() {
+    // R-31 (PR #1 Codex review iteration 5 finding 8): the check now runs
+    // inside `ClaudeAdapter::invoke`, the genuinely last thing before the
+    // one `runner.run` call that spawns the real provider process -- after
+    // the version/auth probes (Step 7) and the fingerprint gate (Step 8),
+    // both of which also call the runner. A prior version of this test only
+    // proved "before *some* spawn," which an accidental move of the check
+    // back to an earlier step would not have caught (the version/auth
+    // probes would simply go uncalled/unconsumed and nothing here would
+    // notice). This version uses a `SharedRunner` so the captured-request
+    // list is inspectable *after* `query()` returns, and asserts on it
+    // directly: exactly the two probe requests (`--version`, then `auth
+    // status --json`) were captured, in that order, proving the probes
+    // genuinely ran -- and nothing else was, proving `invoke`'s own
+    // `runner.run` (which would be a third, `--add-dir`-shaped request) was
+    // never reached.
+    let fixture = build_fixture();
+    fs::write(
+        fixture.project_root.join(".claude/settings.json"),
+        br#"{"apiKeyHelper":"echo hooked"}"#,
+    )
+    .unwrap();
+    let config = build_config(&fixture, Agent::Claude);
+    let inner = Arc::new(FakeProcessRunner::new());
+    queue_success_probes(&inner, Agent::Claude);
+    let probes = FakeProbeReader::new();
+    seed_matching_probe(&probes, &fixture, &config, Agent::Claude);
+    let handle = Arc::clone(&inner);
+    let service = QueryService::new(SharedRunner(inner), probes);
+    let request = build_request(
+        &fixture,
+        config,
+        Agent::Claude,
+        b"What does this wiki cover?",
+    );
+    let envelope = service
+        .query(request, QueryMode::Enforced)
+        .expect("Ok envelope");
+
+    assert!(!envelope.ok);
+    assert_eq!(envelope.error.unwrap().code, ErrorCode::EntrypointInvalid);
+
+    let captured = handle.captured_requests();
+    assert_eq!(
+        captured.len(),
+        2,
+        "expected exactly the version+auth probes to have run, nothing more: {captured:?}"
+    );
+    assert_eq!(captured[0].args, vec![OsString::from("--version")]);
+    assert_eq!(
+        captured[1].args,
+        vec![
+            OsString::from("auth"),
+            OsString::from("status"),
+            OsString::from("--json"),
+        ]
+    );
+    assert_eq!(envelope.child_exit_code, None);
+}
+
+#[test]
+fn query_still_succeeds_when_wiki_settings_declare_only_enabled_plugins() {
+    let fixture = build_fixture();
+    fs::write(
+        fixture.project_root.join(".claude/settings.local.json"),
+        br#"{"enabledPlugins":{"llm-wiki@llm-wiki":true}}"#,
+    )
+    .unwrap();
+    let config = build_config(&fixture, Agent::Claude);
+    let runner = FakeProcessRunner::new();
+    queue_success_probes(&runner, Agent::Claude);
+    runner.push_response(Ok(completed_outcome(
+        &claude_success_stdout("Grounded answer with [[harness-engineering]]."),
+        b"",
+        0,
+    )));
+    let probes = FakeProbeReader::new();
+    seed_matching_probe(&probes, &fixture, &config, Agent::Claude);
+    let service = QueryService::new(runner, probes);
+    let request = build_request(
+        &fixture,
+        config,
+        Agent::Claude,
+        b"What does this wiki cover?",
+    );
+    let envelope = service
+        .query(request, QueryMode::Enforced)
+        .expect("Ok envelope");
+
+    assert!(envelope.ok, "expected success, got {envelope:?}");
+    // R-32: enabledPlugins is admitted but not silent -- the wrapper
+    // surfaces CLAUDE_ENABLED_PLUGINS_DECLARED so an operator is told.
+    assert!(
+        envelope
+            .warnings
+            .iter()
+            .any(|w| w.code == "CLAUDE_ENABLED_PLUGINS_DECLARED"),
+        "expected the enabledPlugins advisory warning, got {:?}",
+        envelope.warnings
+    );
+}
+
+/// A [`ProcessRunner`] that writes a settings file to disk the first time
+/// `run` is called, then delegates to an inner `FakeProcessRunner` --
+/// simulating a wiki's `.claude/settings.local.json` coming into existence
+/// only after the version/auth probes have already started (PR #1 Codex
+/// review iteration 6 finding B).
+struct SettingsInjectingRunner {
+    inner: FakeProcessRunner,
+    settings_path: PathBuf,
+    injected: std::sync::atomic::AtomicBool,
+}
+
+impl ProcessRunner for SettingsInjectingRunner {
+    fn run(&self, request: ProcessRequest) -> Result<ProcessOutcome, AppError> {
+        if !self
+            .injected
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            fs::create_dir_all(self.settings_path.parent().unwrap()).unwrap();
+            fs::write(&self.settings_path, br#"{"enabledPlugins":{"x@y":true}}"#).unwrap();
+        }
+        self.inner.run(request)
+    }
+}
+
+#[test]
+fn enabled_plugins_warning_is_never_missed_even_if_settings_appear_after_the_probes_start() {
+    // PR #1 Codex review iteration 6 finding B: the warning used to be
+    // sampled once, early (before the version/auth probes), from a
+    // *separate* read of the same settings check that `ClaudeAdapter::invoke`
+    // runs authoritatively right before spawn. A wiki whose settings started
+    // declaring `enabledPlugins` only between those two reads would still be
+    // enforced correctly (invoke's own check would see it and admit it) but
+    // the warning would be silently missing, because the early sample ran
+    // first and found nothing. This fixture starts with NO
+    // `.claude/settings.local.json` at all -- so an early sample, if one
+    // still existed, would find `declares_enabled_plugins == false` -- and a
+    // `SettingsInjectingRunner` writes the file only once the first
+    // `runner.run` call happens (the version probe, Step 7), i.e. strictly
+    // after where the old early sample used to run (Step 6) and strictly
+    // before `ClaudeAdapter::invoke`'s own authoritative check (Step 11).
+    // The warning must still appear: the only correct way to guarantee that
+    // is for the warning to be driven by `invoke`'s own authoritative read,
+    // never a separate earlier one.
+    let fixture = build_fixture();
+    assert!(
+        !fixture
+            .project_root
+            .join(".claude/settings.local.json")
+            .exists(),
+        "fixture must start without the settings file for this test to mean anything"
+    );
+    let config = build_config(&fixture, Agent::Claude);
+    let inner = FakeProcessRunner::new();
+    queue_success_probes(&inner, Agent::Claude);
+    inner.push_response(Ok(completed_outcome(
+        &claude_success_stdout("Grounded answer with [[harness-engineering]]."),
+        b"",
+        0,
+    )));
+    let runner = SettingsInjectingRunner {
+        inner,
+        settings_path: fixture.project_root.join(".claude/settings.local.json"),
+        injected: std::sync::atomic::AtomicBool::new(false),
+    };
+    let probes = FakeProbeReader::new();
+    seed_matching_probe(&probes, &fixture, &config, Agent::Claude);
+    let service = QueryService::new(runner, probes);
+    let request = build_request(
+        &fixture,
+        config,
+        Agent::Claude,
+        b"What does this wiki cover?",
+    );
+    let envelope = service
+        .query(request, QueryMode::Enforced)
+        .expect("Ok envelope");
+
+    assert!(envelope.ok, "expected success, got {envelope:?}");
+    assert!(
+        envelope
+            .warnings
+            .iter()
+            .any(|w| w.code == "CLAUDE_ENABLED_PLUGINS_DECLARED"),
+        "expected the enabledPlugins advisory warning even though the settings file only \
+         appeared after the version/auth probes started, got {:?}",
+        envelope.warnings
+    );
 }
 
 // ---------------------------------------------------------------------------
