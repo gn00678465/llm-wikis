@@ -12,8 +12,9 @@ use crate::output::{Agent, RawFormat, Warning, WrapperWarningCode};
 use crate::process::{ProcessRequest, ResolvedExecutable};
 
 use super::{
-    AuthStatus, InvokeOutcome, ProcessRunner, ProviderAdapter, ProviderRequest, cap_diagnostic,
-    map_nonzero_exit, map_termination, no_child_outcome, result_json_schema,
+    AuthStatus, InvokeOutcome, NON_INTERACTIVE_SYSTEM_DIRECTIVES, ProcessRunner, ProviderAdapter,
+    ProviderRequest, cap_diagnostic, map_nonzero_exit, map_termination, no_child_outcome,
+    result_json_schema,
 };
 
 /// The fixed, minimum tool set (spec §10.2/§7.2): no Write, Edit, Bash, web,
@@ -54,6 +55,20 @@ pub fn read_scope_broad_warning(project_root: &Path, content_root: &Path) -> Opt
 /// gap" text.
 pub const DISABLE_ALL_HOOKS_SETTINGS: &str = "{\"disableAllHooks\":true}";
 
+/// R-34 (PRD 08-06-pre-0-1-0-cli-refinements, D6): a deliberate, narrower
+/// reversal of the earlier "`--setting-sources` is not used here at all any
+/// more" posture left over from R-27/R-28 (see [`build_argv`]'s own doc
+/// comment for that full history). R-27's original `--setting-sources user`
+/// *excluded* the `project` setting source and broke project-skill
+/// discovery (R-28); `--setting-sources project` is the **opposite**
+/// exclusion — it drops `user` and `local` (where a user-level
+/// `enabledPlugins`/hook lives, the source of the `SessionEnd` "Hook
+/// cancelled" pollution this task fixes) while keeping `project` (which
+/// skill discovery itself depends on). Live-verified compatible with
+/// [`DISABLE_ALL_HOOKS_SETTINGS`] and successful `/name` skill expansion,
+/// zero `permission_denials` (research/provider-cli-flags.md §2, §3).
+pub const SETTING_SOURCES_PROJECT: &str = "project";
+
 /// Builds the exact Claude argv vector (spec §10.2). Never includes the
 /// entrypoint or `query_prompt` — those exist only in the stdin prompt.
 ///
@@ -70,7 +85,10 @@ pub const DISABLE_ALL_HOOKS_SETTINGS: &str = "{\"disableAllHooks\":true}";
 /// user` was tried instead/in addition (R-27) and reverted (R-28) — it also
 /// excludes the `project` setting source that Claude's project-skill
 /// discovery itself depends on, breaking every `project_skill`-load-mode
-/// wiki's entrypoint; it is **not** used here.
+/// wiki's entrypoint. `--setting-sources project` — the opposite exclusion,
+/// dropping `user`/`local` while keeping `project` — **is** used here,
+/// added later for an unrelated reason (R-34): see
+/// [`SETTING_SOURCES_PROJECT`]'s own doc comment.
 ///
 /// **This argv alone is not the trust boundary — do not read it as one.**
 /// `--settings`/`--strict-mcp-config`/`--tools` bound hooks, MCP, and the
@@ -114,6 +132,19 @@ pub fn build_argv(
         OsString::from(json_schema),
         OsString::from("--settings"),
         OsString::from(DISABLE_ALL_HOOKS_SETTINGS),
+        // PRD 08-06-pre-0-1-0-cli-refinements item 3/D5: reinforces the
+        // read-only/no-persistence contract already carried by
+        // `--tools`/`--permission-mode` above with model-behavior
+        // directives text alone cannot mechanically compel (answer and
+        // stop, no save offer, no wiki/index/frontmatter/log update, no
+        // unanswerable follow-up question) — a separate channel from the
+        // closed `constraints` array in the stdin prompt (spec §7.1),
+        // untouched by this change.
+        OsString::from("--append-system-prompt"),
+        OsString::from(NON_INTERACTIVE_SYSTEM_DIRECTIVES),
+        // D6/R-34: see `SETTING_SOURCES_PROJECT`'s own doc comment.
+        OsString::from("--setting-sources"),
+        OsString::from(SETTING_SOURCES_PROJECT),
     ];
     if let Some(dir) = plugin_dir {
         args.push(OsString::from("--plugin-dir"));

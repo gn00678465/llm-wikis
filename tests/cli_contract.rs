@@ -222,13 +222,16 @@ fn help_prints_product_name_and_exits_zero() {
 fn unknown_subcommand_is_argument_invalid_not_a_panic() {
     let assert = bin().args(["skill", "foo"]).assert().failure().code(2);
     let out = assert.get_output();
-    // No stderr diagnostics at all for this path (this wrapper never writes
-    // to stderr outside `--help`/`--version`); the human-mode error text
-    // lands on stdout instead, via the same rendering every other failure
-    // uses.
-    assert!(out.stderr.is_empty());
+    // PRD 08-06-pre-0-1-0-cli-refinements D2/AC3: human-mode error lines
+    // move to stderr for every subcommand, including a top-level parse
+    // failure that never reaches a specific subcommand handler — stdout
+    // stays completely empty (`argument_invalid_query` sets `answer: None`)
+    // and the error line lands on stderr instead, via the same
+    // `eprint_error_line` rendering every other failure uses.
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("ARGUMENT_INVALID"), "{stdout}");
+    assert!(stdout.is_empty(), "{stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("ARGUMENT_INVALID"), "{stderr}");
 }
 
 // OFF-170 (`cargo test --test cli_contract -- argument_invalid_exit`):
@@ -343,6 +346,178 @@ fn config_init_json_success_and_failure_shapes() {
     assert_eq!(v2["ok"], false);
     assert_eq!(v2["created"], false);
     assert_eq!(v2["error"]["code"], "CONFIG_EXISTS");
+}
+
+// ---------------------------------------------------------------------------
+// `config list` / `config validate` (PRD 08-06-pre-0-1-0-cli-refinements
+// AC1; subcommand renamed from `show` to `list` per D7). `doctor` is
+// unchanged by this task (D1) and is exercised elsewhere. `config list` is
+// distinct from the top-level `list` (wiki registry) subcommand exercised
+// above -- clap's `config` prefix keeps the two unambiguous on the command
+// line even though both derive to a bare `list` token at their own depth.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_list_json_success_and_failure_shapes() {
+    let reg = minimal_registry(Some("claude"), "\"claude\", \"codex\"");
+
+    let ok = bin()
+        .args([
+            "--json",
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "config",
+            "list",
+        ])
+        .assert()
+        .success()
+        .code(0);
+    let v = stdout_json(&ok);
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["operation"], "config_list");
+    assert_eq!(v["config"]["config_version"], 1);
+    assert_eq!(v["config"]["default_agent"], "claude");
+    assert!(v["config"]["wikis"]["demo"].is_object());
+    assert!(v["error"].is_null() || v.as_object().unwrap().get("error").is_none());
+
+    let (_tmp, missing) = nonexistent_config_path();
+    let failure = bin()
+        .args([
+            "--json",
+            "--config",
+            missing.to_str().unwrap(),
+            "config",
+            "list",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let vf = stdout_json(&failure);
+    assert_eq!(vf["ok"], false);
+    assert_eq!(vf["operation"], "config_list");
+    assert!(vf.as_object().unwrap().get("config").is_none());
+    assert_eq!(vf["error"]["code"], "CONFIG_INVALID");
+}
+
+#[test]
+fn config_list_human_mode_prints_the_registry_without_starting_a_provider() {
+    let reg = minimal_registry(Some("claude"), "\"claude\"");
+    let assert = bin()
+        .args([
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "config",
+            "list",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    assert!(stdout.contains("config_version = 1"), "{stdout}");
+    assert!(stdout.contains("default_agent = claude"), "{stdout}");
+    assert!(stdout.contains("demo"), "{stdout}");
+}
+
+#[test]
+fn config_list_human_mode_failure_prints_the_error_line_to_stderr_only() {
+    let (_tmp, missing) = nonexistent_config_path();
+    let assert = bin()
+        .args(["--config", missing.to_str().unwrap(), "config", "list"])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    assert!(String::from_utf8_lossy(&out.stdout).is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("CONFIG_INVALID"), "{stderr}");
+}
+
+#[test]
+fn config_validate_json_success_and_failure_shapes() {
+    let reg = minimal_registry(None, "\"claude\"");
+
+    let ok = bin()
+        .args([
+            "--json",
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "config",
+            "validate",
+        ])
+        .assert()
+        .success()
+        .code(0);
+    let v = stdout_json(&ok);
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["operation"], "config_validate");
+    let top: BTreeSet<String> = v.as_object().unwrap().keys().cloned().collect();
+    assert_eq!(
+        top,
+        ["schema_version", "ok", "operation", "path"]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        "config validate's success shape must never echo the parsed config back"
+    );
+
+    let (_tmp, missing) = nonexistent_config_path();
+    let failure = bin()
+        .args([
+            "--json",
+            "--config",
+            missing.to_str().unwrap(),
+            "config",
+            "validate",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let vf = stdout_json(&failure);
+    assert_eq!(vf["ok"], false);
+    assert_eq!(vf["operation"], "config_validate");
+    assert_eq!(vf["error"]["code"], "CONFIG_INVALID");
+}
+
+#[test]
+fn config_validate_never_mutates_the_target_file() {
+    // AC1: "without side effects" — a failing `validate` call must not
+    // touch the target file's bytes at all.
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("config.toml");
+    let tampered =
+        b"config_version = 1\n# deliberately incomplete, no closing table\n[wikis.demo".to_vec();
+    fs::write(&target, &tampered).unwrap();
+
+    bin()
+        .args([
+            "--json",
+            "--config",
+            target.to_str().unwrap(),
+            "config",
+            "validate",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+
+    let after = fs::read(&target).unwrap();
+    assert_eq!(
+        after, tampered,
+        "config validate must never modify its target"
+    );
+}
+
+#[test]
+fn config_validate_human_mode_failure_prints_the_error_line_to_stderr_only() {
+    let (_tmp, missing) = nonexistent_config_path();
+    let assert = bin()
+        .args(["--config", missing.to_str().unwrap(), "config", "validate"])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    assert!(String::from_utf8_lossy(&out.stdout).is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("CONFIG_INVALID"), "{stderr}");
 }
 
 // OFF-020 (Windows platform default config path formula): with `--config`
@@ -806,6 +981,92 @@ fn human_mode_never_prints_json_on_stdout_for_an_argument_failure() {
         .code(2);
     let out = assert.get_output();
     assert!(!String::from_utf8_lossy(&out.stdout).contains('{'));
+    // PRD 08-06-pre-0-1-0-cli-refinements D2/AC3: the human-mode companion
+    // of `json_mode_emits_exactly_one_document_even_for_a_top_level_parse_failure`
+    // — stdout is fully empty and the error line lands on stderr instead.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.is_empty(), "{stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("ARGUMENT_INVALID"), "{stderr}");
+}
+
+// ---------------------------------------------------------------------------
+// Human-mode error lines on stderr, end to end through the real binary, for
+// every subcommand (PRD 08-06-pre-0-1-0-cli-refinements D2/AC3). The two
+// tests above only exercise *pre-dispatch* clap parse failures; these four
+// prove the same routing for a failure reached after a subcommand handler
+// actually ran.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_human_mode_failure_prints_the_error_line_to_stderr_only() {
+    let (_tmp, missing) = nonexistent_config_path();
+    let assert = bin()
+        .args(["--config", missing.to_str().unwrap(), "list"])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    assert!(String::from_utf8_lossy(&out.stdout).is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("CONFIG_INVALID"), "{stderr}");
+}
+
+#[test]
+fn doctor_human_mode_failure_prints_the_error_line_to_stderr_only() {
+    let (_tmp, missing) = nonexistent_config_path();
+    let assert = bin()
+        .args(["--config", missing.to_str().unwrap(), "doctor"])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    assert!(String::from_utf8_lossy(&out.stdout).is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("CONFIG_INVALID"), "{stderr}");
+}
+
+#[test]
+fn config_init_human_mode_failure_prints_the_error_line_to_stderr_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("config.toml");
+    let target_str = target.display().to_string();
+    bin()
+        .args(["--config", &target_str, "config", "init"])
+        .assert()
+        .success();
+
+    let assert = bin()
+        .args(["--config", &target_str, "config", "init"])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    assert!(String::from_utf8_lossy(&out.stdout).is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("CONFIG_EXISTS"), "{stderr}");
+}
+
+#[test]
+fn query_human_mode_failure_prints_the_error_line_to_stderr_only() {
+    let reg = minimal_registry(None, "\"claude\"");
+    let assert = bin()
+        .args([
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "query",
+            "--wiki",
+            "all",
+            "--",
+            "x",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    assert!(String::from_utf8_lossy(&out.stdout).is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("ARGUMENT_INVALID"), "{stderr}");
 }
 
 // ---------------------------------------------------------------------------
@@ -1511,6 +1772,16 @@ skill_path = ".claude/skills/wiki-query/SKILL.md"
         assert!(
             answer_pos < warnings_pos,
             "answer must print before warnings: {human_out:?}"
+        );
+        // PRD 08-06-pre-0-1-0-cli-refinements AC2: `assert_cmd` always
+        // captures stderr through an OS pipe, never a pty, so
+        // `stderr.is_terminal()` is deterministically false here and the
+        // spinner branch is never entered — stderr must be completely
+        // empty on a successful human-mode run.
+        assert!(
+            human_assert.get_output().stderr.is_empty(),
+            "no spinner bytes or diagnostics expected under a piped stderr: {:?}",
+            String::from_utf8_lossy(&human_assert.get_output().stderr)
         );
 
         // Sanity: the wiki fixture's content root was never mutated by any

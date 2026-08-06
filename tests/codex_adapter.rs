@@ -18,7 +18,8 @@ use llm_wikis::providers::codex::{
     parse_codex_output, read_scope_broad_warning,
 };
 use llm_wikis::providers::{
-    FakeProcessRunner, ProviderAdapter, ProviderRequest, completed_outcome,
+    FakeProcessRunner, NON_INTERACTIVE_SYSTEM_DIRECTIVES, ProviderAdapter, ProviderRequest,
+    completed_outcome,
 };
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -168,6 +169,11 @@ fn exact_argv() {
         OsString::from("--ignore-user-config"),
         OsString::from("-c"),
         OsString::from("mcp_servers={}"),
+        // PRD 08-06-pre-0-1-0-cli-refinements item 3/D5.
+        OsString::from("-c"),
+        OsString::from(format!(
+            "developer_instructions={NON_INTERACTIVE_SYSTEM_DIRECTIVES}"
+        )),
         OsString::from("--disable"),
         OsString::from("browser_use"),
         OsString::from("--disable"),
@@ -229,6 +235,14 @@ fn capability_exclusion() {
         args.windows(2)
             .any(|w| w[0] == "-c" && w[1] == "mcp_servers={}")
     );
+    // PRD 08-06-pre-0-1-0-cli-refinements item 3/D5: the additive
+    // non-interactive directive override, adjacent to the pair above.
+    assert!(args.windows(2).any(|w| {
+        w[0] == "-c"
+            && w[1]
+                .to_string_lossy()
+                .starts_with("developer_instructions=")
+    }));
     assert!(
         args.windows(2)
             .any(|w| w[0] == "--disable" && w[1] == "browser_use")

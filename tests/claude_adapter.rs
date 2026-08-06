@@ -14,11 +14,12 @@ use llm_wikis::error::{AppError, ErrorCode};
 use llm_wikis::output::RawFormat;
 use llm_wikis::process::{ExecutableKind, ResolvedExecutable};
 use llm_wikis::providers::claude::{
-    CLAUDE_READ_SCOPE_BROAD_MESSAGE, ClaudeAdapter, DISABLE_ALL_HOOKS_SETTINGS, build_argv,
-    parse_claude_output, read_scope_broad_warning,
+    CLAUDE_READ_SCOPE_BROAD_MESSAGE, ClaudeAdapter, DISABLE_ALL_HOOKS_SETTINGS,
+    SETTING_SOURCES_PROJECT, build_argv, parse_claude_output, read_scope_broad_warning,
 };
 use llm_wikis::providers::{
-    FakeProcessRunner, ProviderAdapter, ProviderRequest, completed_outcome,
+    FakeProcessRunner, NON_INTERACTIVE_SYSTEM_DIRECTIVES, ProviderAdapter, ProviderRequest,
+    completed_outcome,
 };
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -167,11 +168,17 @@ fn exact_argv() {
         // keep this assertion green. The literal byte value is what
         // actually reaches the real `claude` process.
         OsString::from(r#"{"disableAllHooks":true}"#),
+        // PRD 08-06-pre-0-1-0-cli-refinements item 3/D5 and item 4/D6.
+        OsString::from("--append-system-prompt"),
+        OsString::from(NON_INTERACTIVE_SYSTEM_DIRECTIVES),
+        OsString::from("--setting-sources"),
+        OsString::from("project"),
     ];
     assert_eq!(args, expected);
     // The constant itself must still equal the literal this test pins —
     // catches the constant and the real argv drifting from each other.
     assert_eq!(DISABLE_ALL_HOOKS_SETTINGS, r#"{"disableAllHooks":true}"#);
+    assert_eq!(SETTING_SOURCES_PROJECT, "project");
 }
 
 /// Regression test for a review-found vulnerability (PR #1, Codex review
@@ -180,12 +187,24 @@ fn exact_argv() {
 /// four-arm experiment showed the original fix's `--setting-sources user`
 /// broke project-skill discovery itself (every `project_skill`-load-mode
 /// wiki's slash entrypoint resolved to `"Unknown command: /<name>"` instead
-/// of invoking the skill) — `--setting-sources` is **not** used here at all
-/// any more, only `--settings {"disableAllHooks":true}`.
+/// of invoking the skill) — `--setting-sources` was **not** used at all,
+/// only `--settings {"disableAllHooks":true}`, from iteration 2 until this
+/// task.
 ///
-/// The threat this still defends against: the child's cwd is the wiki's own
-/// `project_root` (`src/providers/claude.rs::invoke`), so Claude Code's `-p`
-/// mode auto-loads that untrusted directory's `.claude/settings.json` /
+/// **Updated for PRD 08-06-pre-0-1-0-cli-refinements, D6 (R-34)**:
+/// `--setting-sources project` is now added back — the *opposite*
+/// exclusion from the reverted `user` value (drops `user`/`local`, keeps
+/// `project`), added for an unrelated reason (fixing a `SessionEnd` "Hook
+/// cancelled" pollution source traced to a user-level plugin/hook) and
+/// live-verified not to reproduce the iteration-2 regression: a project
+/// skill still resolved and answered correctly with both
+/// `--setting-sources project` and `--settings {"disableAllHooks":true}`
+/// present together (research/provider-cli-flags.md §2, §3).
+///
+/// The threat `--settings {"disableAllHooks":true}` itself still defends
+/// against: the child's cwd is the wiki's own `project_root`
+/// (`src/providers/claude.rs::invoke`), so Claude Code's `-p` mode
+/// auto-loads that untrusted directory's `.claude/settings.json` /
 /// `settings.local.json` and **runs any hooks they declare** (SessionStart,
 /// PreToolUse, ...) — arbitrary shell, entirely outside the `--tools
 /// Read,Grep,Glob` gate, which restricts only built-in tools, not hook
@@ -195,7 +214,7 @@ fn exact_argv() {
 /// hook declared by user, project, or local settings (CLI-supplied
 /// `--settings` outranks all of those) — not an admin-managed/
 /// enterprise-policy hook, which no flag here reaches — while leaving
-/// project/local settings otherwise loaded, so skill discovery still works.
+/// project settings otherwise loaded, so skill discovery still works.
 /// Empirically confirmed live (checkpoint,
 /// iteration 2): with the corrected argv, a project skill resolved and
 /// answered correctly *and* a project-declared `SessionStart` hook on the
@@ -219,10 +238,17 @@ fn hook_neutralization_settings_flag_present_without_excluding_setting_sources()
         OsString::from(r#"{"disableAllHooks":true}"#),
         "literal expected value, not the production constant (iteration 3 finding 2)"
     );
-    assert!(
-        !args.iter().any(|a| a == "--setting-sources"),
-        "--setting-sources must never appear — it excludes the project setting \
-         source that project-skill discovery itself depends on (review loop iteration 2)"
+    // D6/R-34: `--setting-sources project` is now present (the opposite
+    // exclusion from the reverted `user` value) — it must appear after the
+    // `--settings` pair and before any optional `--plugin-dir`, same as
+    // `--append-system-prompt`.
+    let setting_sources_pos = args
+        .iter()
+        .position(|a| a == "--setting-sources")
+        .expect("--setting-sources project must be present (D6/R-34)");
+    assert_eq!(
+        args[setting_sources_pos + 1],
+        OsString::from(SETTING_SOURCES_PROJECT)
     );
 
     // Even with a local_plugin --plugin-dir, the hook-neutralization flag
@@ -234,7 +260,12 @@ fn hook_neutralization_settings_flag_present_without_excluding_setting_sources()
         .iter()
         .position(|a| a == "--plugin-dir")
         .unwrap();
+    let setting_sources_pos_with_plugin = with_plugin
+        .iter()
+        .position(|a| a == "--setting-sources")
+        .unwrap();
     assert!(settings_pos < plugin_pos);
+    assert!(setting_sources_pos_with_plugin < plugin_pos);
 }
 
 #[test]

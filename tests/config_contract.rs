@@ -7,11 +7,12 @@ use std::path::Path;
 
 use llm_wikis::config::{
     Config, LoadMode, MapEnv, Platform, ProviderWikiConfig, WikiConfig,
-    check_claude_wiki_settings_surface, default_cache_path, default_config_path,
-    resolve_and_check_artifact, resolve_wiki_roots, validate_config_override, validate_entrypoint,
-    validate_executable, validate_query_prompt,
+    check_claude_wiki_settings_surface, config_list_envelope, config_list_error_envelope,
+    config_validate_envelope, config_validate_error_envelope, default_cache_path,
+    default_config_path, resolve_and_check_artifact, resolve_wiki_roots, validate_config_override,
+    validate_entrypoint, validate_executable, validate_query_prompt,
 };
-use llm_wikis::error::ErrorCode;
+use llm_wikis::error::{AppError, ErrorCode};
 use llm_wikis::output::Agent;
 
 fn env(pairs: &[(&str, &str)]) -> MapEnv {
@@ -1213,4 +1214,130 @@ fn non_object_json_fails_closed() {
     let project = settings_project(tmp.path(), "settings.json", "[1,2,3]");
     let err = check_claude_wiki_settings_surface(&project).unwrap_err();
     assert_eq!(err.code, ErrorCode::EntrypointInvalid);
+}
+
+// ---------------------------------------------------------------------------
+// `config list` / `config validate` envelopes (PRD
+// 08-06-pre-0-1-0-cli-refinements AC1; subcommand renamed from `show` to
+// `list` per D7). Both reuse `Config::load` exactly; no new `ErrorCode`
+// variant is introduced by either.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_list_envelope_success_matches_the_exact_contract() {
+    let text = include_str!("../config.example.toml");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(&path, text).unwrap();
+
+    let envelope = config_list_envelope(&path);
+    assert!(envelope.ok);
+    assert_eq!(envelope.operation, "config_list");
+    assert_eq!(envelope.schema_version, "1.0");
+    assert_eq!(envelope.path, path.display().to_string());
+    assert!(envelope.error.is_none());
+    let config = envelope.config.as_ref().expect("config present on success");
+    assert_eq!(config.wikis.len(), 2);
+
+    let value = serde_json::to_value(&envelope).unwrap();
+    let keys: std::collections::BTreeSet<String> =
+        value.as_object().unwrap().keys().cloned().collect();
+    assert_eq!(
+        keys,
+        ["schema_version", "ok", "operation", "path", "config"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    );
+    // The full config round-trips through serde: a spot check on a nested
+    // field proves the Serialize derive actually reached the wiki tables,
+    // not just the top-level struct.
+    assert_eq!(
+        value["config"]["wikis"]["agents"]["title"],
+        "Agents Knowledge Base"
+    );
+}
+
+#[test]
+fn config_list_envelope_failure_carries_no_config_and_the_public_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("does-not-exist.toml");
+    let envelope = config_list_envelope(&missing);
+    assert!(!envelope.ok);
+    assert_eq!(envelope.operation, "config_list");
+    assert!(envelope.config.is_none());
+    let err = envelope.error.as_ref().expect("error object present");
+    assert_eq!(err.code, ErrorCode::ConfigInvalid);
+
+    let value = serde_json::to_value(&envelope).unwrap();
+    let obj = value.as_object().unwrap();
+    assert_eq!(obj.get("ok").unwrap(), false);
+    assert!(!obj.contains_key("config"));
+    assert!(obj.contains_key("error"));
+}
+
+#[test]
+fn config_list_error_envelope_used_only_when_the_path_itself_cannot_resolve() {
+    let err = AppError::new(ErrorCode::ArgumentInvalid, "relative --config override");
+    let envelope = config_list_error_envelope(err);
+    assert!(!envelope.ok);
+    assert_eq!(envelope.operation, "config_list");
+    assert_eq!(envelope.path, "");
+    assert_eq!(
+        envelope.error.as_ref().unwrap().code,
+        ErrorCode::ArgumentInvalid
+    );
+}
+
+#[test]
+fn config_validate_envelope_success_never_echoes_the_parsed_config() {
+    let text = include_str!("../config.example.toml");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(&path, text).unwrap();
+
+    let envelope = config_validate_envelope(&path);
+    assert!(envelope.ok);
+    assert_eq!(envelope.operation, "config_validate");
+    assert_eq!(envelope.schema_version, "1.0");
+    assert_eq!(envelope.path, path.display().to_string());
+    assert!(envelope.error.is_none());
+
+    let value = serde_json::to_value(&envelope).unwrap();
+    let keys: std::collections::BTreeSet<String> =
+        value.as_object().unwrap().keys().cloned().collect();
+    assert_eq!(
+        keys,
+        ["schema_version", "ok", "operation", "path"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        "config validate's envelope must never carry a config field"
+    );
+}
+
+#[test]
+fn config_validate_envelope_failure_carries_the_public_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bad = tmp.path().join("bad.toml");
+    fs::write(&bad, "config_version = 2\n").unwrap();
+
+    let envelope = config_validate_envelope(&bad);
+    assert!(!envelope.ok);
+    assert_eq!(envelope.operation, "config_validate");
+    let err = envelope.error.as_ref().expect("error object present");
+    assert_eq!(err.code, ErrorCode::ConfigInvalid);
+}
+
+#[test]
+fn config_validate_error_envelope_used_only_when_the_path_itself_cannot_resolve() {
+    let err = AppError::new(ErrorCode::ArgumentInvalid, "relative --config override");
+    let envelope = config_validate_error_envelope(err);
+    assert!(!envelope.ok);
+    assert_eq!(envelope.operation, "config_validate");
+    assert_eq!(envelope.path, "");
+    assert_eq!(
+        envelope.error.as_ref().unwrap().code,
+        ErrorCode::ArgumentInvalid
+    );
 }

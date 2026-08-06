@@ -155,7 +155,7 @@ fn default_max_stderr_bytes() -> u64 {
 /// `#[serde(default)]`); each field independently defaults via its own
 /// `default = "..."` function, so a partially-specified table still fills in the
 /// missing fields individually rather than replacing the whole table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     #[serde(default = "default_timeout_seconds")]
@@ -210,7 +210,7 @@ impl RuntimeConfig {
 }
 
 /// `[providers.<agent>]` (spec §6). Table is optional per provider.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProvidersConfig {
     #[serde(default)]
@@ -228,7 +228,7 @@ impl ProvidersConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
     #[serde(default)]
@@ -236,7 +236,7 @@ pub struct ProviderConfig {
 }
 
 /// `load` (spec §6.2). Exactly two supported modes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LoadMode {
     ProjectSkill,
@@ -245,7 +245,7 @@ pub enum LoadMode {
 
 /// `[wikis.<id>.<agent>]` (spec §6.2). Field requiredness beyond `load`/`entrypoint`
 /// depends on `load` and is checked semantically, not structurally.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderWikiConfig {
     pub load: LoadMode,
@@ -282,7 +282,7 @@ impl ProviderWikiConfig {
 
 /// `[wikis.<id>]` (spec §6). No `query_profiles` table exists in 0.2 — this struct
 /// is the complete closed shape.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WikiConfig {
     pub title: String,
@@ -368,7 +368,7 @@ fn agent_key(agent: Agent) -> &'static str {
 /// The complete strict configuration document (spec §6). No `[query_profiles]`
 /// table exists in 0.2 — an unknown top-level key of that (or any other) name is
 /// rejected by `deny_unknown_fields`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub config_version: u32,
@@ -1109,5 +1109,116 @@ pub fn init_envelope(path: &Path) -> ConfigInitEnvelope {
             created: false,
             error: Some(err),
         },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `config list` / `config validate` (PRD 08-06-pre-0-1-0-cli-refinements
+// AC1; the subcommand itself was renamed from `show` to `list` per D7,
+// after round 1 landed -- the envelope type/constructor names and the
+// `operation` string below follow that rename so all three stay in sync).
+// Both reuse `Config::load` exactly the way `run_list_command`
+// (`src/cli.rs`) already does for the top-level `list` -- no new
+// path-resolution or validation logic. Neither introduces a new
+// `ErrorCode`: every failure here is a `Config::load` failure already
+// mapped by the existing scheme. Not to be confused with `ListEnvelope`
+// (`src/doctor.rs`), which lists registered *wikis* rather than the
+// resolved configuration document itself.
+// ---------------------------------------------------------------------------
+
+/// `config list`'s success/failure envelope. "Resolved configuration" means
+/// the parsed `Config` after serde's own field-level defaulting -- exactly
+/// what `Config::load` already produces -- never additionally
+/// filesystem-canonicalized per wiki (that stays `resolve_wiki_roots`'s job,
+/// already owned by `doctor`/`query`). Doctor is unchanged by this task.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigListEnvelope {
+    pub schema_version: &'static str,
+    pub ok: bool,
+    pub operation: &'static str,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<Config>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<AppError>,
+}
+
+/// Builds the `config list` envelope for an already-resolved config path.
+pub fn config_list_envelope(path: &Path) -> ConfigListEnvelope {
+    match Config::load(path) {
+        Ok(config) => ConfigListEnvelope {
+            schema_version: SCHEMA_VERSION,
+            ok: true,
+            operation: "config_list",
+            path: path.display().to_string(),
+            config: Some(config),
+            error: None,
+        },
+        Err(err) => ConfigListEnvelope {
+            schema_version: SCHEMA_VERSION,
+            ok: false,
+            operation: "config_list",
+            path: path.display().to_string(),
+            config: None,
+            error: Some(err),
+        },
+    }
+}
+
+/// Used only when the config *path itself* could not even be resolved
+/// (relative `--config` override, unresolvable platform default) --
+/// mirrors `list_error_envelope`'s role for the top-level `list`
+/// (`src/doctor.rs`).
+pub fn config_list_error_envelope(err: AppError) -> ConfigListEnvelope {
+    ConfigListEnvelope {
+        schema_version: SCHEMA_VERSION,
+        ok: false,
+        operation: "config_list",
+        path: String::new(),
+        config: None,
+        error: Some(err),
+    }
+}
+
+/// `config validate`'s success/failure envelope: the same `Config::load`
+/// outcome as [`ConfigListEnvelope`], minus the parsed document itself --
+/// AC1 asks only for "ok/errors without side effects," not an echo of the
+/// resolved configuration back to the caller.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigValidateEnvelope {
+    pub schema_version: &'static str,
+    pub ok: bool,
+    pub operation: &'static str,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<AppError>,
+}
+
+pub fn config_validate_envelope(path: &Path) -> ConfigValidateEnvelope {
+    match Config::load(path) {
+        Ok(_) => ConfigValidateEnvelope {
+            schema_version: SCHEMA_VERSION,
+            ok: true,
+            operation: "config_validate",
+            path: path.display().to_string(),
+            error: None,
+        },
+        Err(err) => ConfigValidateEnvelope {
+            schema_version: SCHEMA_VERSION,
+            ok: false,
+            operation: "config_validate",
+            path: path.display().to_string(),
+            error: Some(err),
+        },
+    }
+}
+
+pub fn config_validate_error_envelope(err: AppError) -> ConfigValidateEnvelope {
+    ConfigValidateEnvelope {
+        schema_version: SCHEMA_VERSION,
+        ok: false,
+        operation: "config_validate",
+        path: String::new(),
+        error: Some(err),
     }
 }

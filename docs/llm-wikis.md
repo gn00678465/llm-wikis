@@ -197,6 +197,26 @@ already exist**. An existing destination fails closed with `CONFIG_EXISTS`
 (exit `2`); it is never merged or overwritten. There is no wizard and no
 `config add-wiki` command in 0.1.0 — add wikis by hand-editing the TOML.
 
+### 2.3a `config list` and `config validate`
+
+```powershell
+llm-wikis config list
+llm-wikis config validate
+```
+
+`config list` loads the configuration the same way every other subcommand
+does (`--config` override, else the platform-native default) and prints the
+resolved document — the parsed configuration after its own field-level
+defaulting, never additionally filesystem-canonicalized per wiki (that stays
+`doctor`'s job). It is a different command from the top-level `llm-wikis
+list`, which enumerates registered wikis rather than the whole
+configuration document; the `config` prefix distinguishes the two on the
+command line. `config validate` performs the identical load-and-validate
+step but never echoes the document back and never writes anything — useful
+in a pre-commit hook or CI step that only needs a pass/fail signal. Neither
+starts a provider; both reuse the same error codes/exit classes as every
+other config-loading subcommand (most commonly `CONFIG_INVALID`, exit `2`).
+
 ### 2.4 Registering wikis
 
 A minimal registry:
@@ -383,6 +403,8 @@ explicit, quota-consuming confirmation that the contract still holds.
 ```text
 llm-wikis --version
 llm-wikis [--config <absolute-path>] [--json] config init
+llm-wikis [--config <absolute-path>] [--json] config list
+llm-wikis [--config <absolute-path>] [--json] config validate
 llm-wikis [--config <absolute-path>] [--json] list
 llm-wikis [--config <absolute-path>] [--json] doctor [--wiki <id>] [--agent claude|codex] [--live]
 llm-wikis [--config <absolute-path>] [--json] query --wiki <id> [--agent claude|codex] -- <question>
@@ -419,13 +441,22 @@ stdin data — never interpolated into a shell command string — so shell
 metacharacters, quotes, leading dashes, and multi-line/Unicode text all
 transport unchanged.
 
+When stderr is an interactive terminal, `query` shows a small spinner on
+stderr while the provider call is in flight, cleared before the answer (or
+error line) prints — this never appears in a piped, redirected, or CI
+invocation, and never emits anything to stdout at any point.
+
 ### 3.3 JSON envelopes and exit classes
 
 `--json` emits **exactly one** JSON document on stdout per invocation
 (`schema_version: "1.0"`), success or failure alike; human mode prints the
-answer, then gaps, then warnings, to stdout, with diagnostics on stderr.
-Every failure uses the same public `error: {code, message, details?}`
-object. The process exit code always equals the failure's documented class:
+answer, then gaps, then warnings, to stdout on success, with every
+diagnostic — including the human-mode error line itself, for every
+subcommand — on stderr instead. A failing human-mode invocation therefore
+prints nothing at all to stdout; the error line (`error: CODE (message)`)
+lands on stderr exclusively. Every failure uses the same public
+`error: {code, message, details?}` object. The process exit code always
+equals the failure's documented class:
 
 | Exit | Meaning |
 |---:|---|
@@ -527,11 +558,16 @@ layers stack:
    Read,Grep,Glob` restriction (layer 6) bounds the built-in tool surface
    regardless of any tool-related setting. These exist because the wiki's
    own settings are still loaded (required for skill discovery — excluding
-   them via `--setting-sources user` was tried and found to break every
-   `project_skill`-mode wiki's entrypoint). **Honest residual gap**: no CLI
-   flag can disable an admin-managed/enterprise-policy hook regardless of
-   any of the above — that is out of this project's scope, and the
-   implementation machine has no managed settings.
+   the `project` source entirely via `--setting-sources user` was tried and
+   found to break every `project_skill`-mode wiki's entrypoint). `--setting-sources
+   project` — the *opposite* exclusion, dropping only `user`/`local` while
+   keeping `project` — is used instead, added later to stop a user-level
+   plugin/hook from being loaded at all for this invocation (the source of a
+   `SessionEnd` "Hook cancelled" pollution symptom); it was live-verified not
+   to reproduce the `user`-value regression. **Honest residual gap**: no CLI
+   flag can disable an admin-managed/enterprise-policy hook or setting source
+   regardless of any of the above — that is out of this project's scope, and
+   the implementation machine has no managed settings.
 10. Codex runs under `--sandbox read-only`; the sandbox is a write-prevention
     guarantee only, not a read-scope limiter (§3.6).
 11. No session persistence on either provider.

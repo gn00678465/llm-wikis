@@ -13,8 +13,9 @@ use crate::output::{Agent, RawFormat, Warning, WrapperWarningCode};
 use crate::process::{ProcessRequest, ResolvedExecutable};
 
 use super::{
-    AuthStatus, InvokeOutcome, ProcessRunner, ProviderAdapter, ProviderRequest, cap_diagnostic,
-    map_nonzero_exit, map_termination, no_child_outcome, result_json_schema,
+    AuthStatus, InvokeOutcome, NON_INTERACTIVE_SYSTEM_DIRECTIVES, ProcessRunner, ProviderAdapter,
+    ProviderRequest, cap_diagnostic, map_nonzero_exit, map_termination, no_child_outcome,
+    result_json_schema,
 };
 
 /// The exact, unconditional `CODEX_READ_SCOPE_BROAD` message text (spec
@@ -35,6 +36,20 @@ pub fn read_scope_broad_warning() -> Warning {
 /// `--add-dir` (that flag grants an additional *writable* root) and never
 /// includes the entrypoint or `query_prompt` — those exist only in the
 /// stdin prompt.
+///
+/// The `-c developer_instructions=<...>` override (PRD
+/// 08-06-pre-0-1-0-cli-refinements item 3/D5) is Codex's additive
+/// system-prompt-append equivalent to Claude's `--append-system-prompt`
+/// (research/provider-cli-flags.md §4: no dedicated flag exists for `exec`;
+/// `developer_instructions` falls through from the generic `-c` override to
+/// the same config field an eventual dedicated flag would populate,
+/// live-verified to additively influence the final answer). Grouped
+/// adjacent to the pre-existing `-c mcp_servers={}` override purely for
+/// readability — `-c` overrides are order-independent among themselves.
+/// [`crate::providers::NON_INTERACTIVE_SYSTEM_DIRECTIVES`]'s own doc
+/// comment states why this value must stay free of `"`/`\`/newline
+/// characters: the `-c` value is TOML-parsed before falling back to a raw
+/// literal.
 pub fn build_argv(project_root: &Path, output_schema_path: &Path) -> Vec<OsString> {
     vec![
         OsString::from("--ask-for-approval"),
@@ -49,6 +64,10 @@ pub fn build_argv(project_root: &Path, output_schema_path: &Path) -> Vec<OsStrin
         OsString::from("--ignore-user-config"),
         OsString::from("-c"),
         OsString::from("mcp_servers={}"),
+        OsString::from("-c"),
+        OsString::from(format!(
+            "developer_instructions={NON_INTERACTIVE_SYSTEM_DIRECTIVES}"
+        )),
         OsString::from("--disable"),
         OsString::from("browser_use"),
         OsString::from("--disable"),

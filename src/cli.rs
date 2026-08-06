@@ -24,8 +24,10 @@ use clap::error::ErrorKind;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::config::{
-    Config, ConfigInitEnvelope, Platform, ProcessEnv, default_cache_path, default_config_path,
-    init_envelope, validate_config_override,
+    Config, ConfigInitEnvelope, ConfigListEnvelope, ConfigValidateEnvelope, Platform, ProcessEnv,
+    config_list_envelope, config_list_error_envelope, config_validate_envelope,
+    config_validate_error_envelope, default_cache_path, default_config_path, init_envelope,
+    validate_config_override,
 };
 use crate::doctor::{
     CheckStatus, DoctorEnvelope, DoctorRequest, ListEnvelope, doctor_error_envelope,
@@ -92,6 +94,20 @@ enum CliCommand {
 #[derive(Subcommand)]
 enum ConfigAction {
     Init,
+    /// Prints the resolved configuration (PRD 08-06-pre-0-1-0-cli-refinements
+    /// AC1, renamed from `show` to `list` per D7). "Resolved" means after
+    /// serde's own field-level defaulting (`Config::load`'s output as-is) —
+    /// never additionally filesystem-canonicalized per wiki, which stays
+    /// `doctor`'s job. clap derives this variant's kebab-case name as
+    /// `list`, which is unambiguous alongside the pre-existing top-level
+    /// `CliCommand::List` (the wiki registry listing) because the two live
+    /// at different subcommand depths: `llm-wikis list` versus
+    /// `llm-wikis config list` — clap requires the full `config` prefix to
+    /// reach this one, so there is no parse-time collision.
+    List,
+    /// Loads and validates the configuration, reporting ok/errors without
+    /// side effects (AC1). `doctor` is unchanged by this task (D1).
+    Validate,
 }
 
 /// A CLI-only mirror of [`Agent`] purely so `clap::ValueEnum` can be derived
@@ -165,6 +181,8 @@ fn dispatch(cli: Cli) -> i32 {
     match cli.command {
         CliCommand::Config { action } => match action {
             ConfigAction::Init => run_config_init(json, config_override),
+            ConfigAction::List => run_config_list(json, config_override),
+            ConfigAction::Validate => run_config_validate(json, config_override),
         },
         CliCommand::List => run_list_command(json, config_override),
         CliCommand::Doctor { wiki, agent, live } => {
@@ -231,6 +249,19 @@ fn render_json_generic<T: serde::Serialize>(value: &T) -> String {
     rendered
 }
 
+/// The one human-readable rendering of a top-level command failure (spec
+/// §5.1/§5.3, PRD 08-06-pre-0-1-0-cli-refinements D2/AC3): always stderr,
+/// never stdout, so a pipe/redirect/CI consumer of stdout never sees error
+/// text mixed into whatever partial human output preceded it. `--json` mode
+/// never calls this — the failing envelope's `error` object is already part
+/// of the single JSON document the `emit_*`/`run_config_*` functions write
+/// to stdout instead. The single source of truth for the format string,
+/// replacing what used to be five independently written
+/// `println!("error: {} ({})", ...)` call sites.
+fn eprint_error_line(err: &AppError) {
+    eprintln!("error: {} ({})", err.code.as_str(), err.message);
+}
+
 fn error_code_from_str(code: &str) -> Option<ErrorCode> {
     ErrorCode::ALL.iter().copied().find(|c| c.as_str() == code)
 }
@@ -277,7 +308,76 @@ fn run_config_init(json: bool, override_path: Option<&Path>) -> i32 {
     } else if envelope.ok {
         println!("Created configuration at {}", envelope.path);
     } else if let Some(err) = &envelope.error {
-        println!("error: {} ({})", err.code.as_str(), err.message);
+        eprint_error_line(err);
+    }
+    exit as i32
+}
+
+// ---------------------------------------------------------------------------
+// `config list` / `config validate` (PRD 08-06-pre-0-1-0-cli-refinements
+// AC1, D7). `doctor` already covers environment verification (D1); these
+// two subcommands are the remaining, narrower ask: print/validate the
+// resolved configuration itself, without starting a provider. `config list`
+// is a deliberately different command from the top-level `list` (which
+// enumerates registered wikis, `print_list_human` below) — this one prints
+// the whole resolved configuration document that produced that registry.
+// ---------------------------------------------------------------------------
+
+fn agent_lowercase(agent: Agent) -> &'static str {
+    match agent {
+        Agent::Claude => "claude",
+        Agent::Codex => "codex",
+    }
+}
+
+fn run_config_list(json: bool, override_path: Option<&Path>) -> i32 {
+    let envelope: ConfigListEnvelope = match resolve_config_path(override_path) {
+        Ok(p) => config_list_envelope(&p),
+        Err(e) => config_list_error_envelope(e),
+    };
+    let exit = envelope
+        .error
+        .as_ref()
+        .map(|e| e.code.exit_code())
+        .unwrap_or(0);
+    if json {
+        print!("{}", render_json_generic(&envelope));
+    } else if let Some(config) = &envelope.config {
+        print_config_list_human(config);
+    } else if let Some(err) = &envelope.error {
+        eprint_error_line(err);
+    }
+    exit as i32
+}
+
+fn print_config_list_human(config: &Config) {
+    println!("config_version = {}", config.config_version);
+    match config.default_agent {
+        Some(a) => println!("default_agent = {}", agent_lowercase(a)),
+        None => println!("default_agent = (none)"),
+    }
+    for (id, wiki) in &config.wikis {
+        let agents: Vec<&'static str> = wiki.agents.iter().copied().map(agent_lowercase).collect();
+        println!("{id} - {} [{}]", wiki.title, agents.join(","));
+    }
+}
+
+fn run_config_validate(json: bool, override_path: Option<&Path>) -> i32 {
+    let envelope: ConfigValidateEnvelope = match resolve_config_path(override_path) {
+        Ok(p) => config_validate_envelope(&p),
+        Err(e) => config_validate_error_envelope(e),
+    };
+    let exit = envelope
+        .error
+        .as_ref()
+        .map(|e| e.code.exit_code())
+        .unwrap_or(0);
+    if json {
+        print!("{}", render_json_generic(&envelope));
+    } else if envelope.ok {
+        println!("Configuration at {} is valid.", envelope.path);
+    } else if let Some(err) = &envelope.error {
+        eprint_error_line(err);
     }
     exit as i32
 }
@@ -306,7 +406,7 @@ fn run_list_command(json: bool, override_path: Option<&Path>) -> i32 {
 
 fn print_list_human(envelope: &ListEnvelope) {
     if let Some(err) = &envelope.error {
-        println!("error: {} ({})", err.code.as_str(), err.message);
+        eprint_error_line(err);
         return;
     }
     for wiki in &envelope.wikis {
@@ -396,7 +496,7 @@ fn doctor_exit_code(envelope: &DoctorEnvelope) -> u8 {
 
 fn print_doctor_human(envelope: &DoctorEnvelope) {
     if let Some(err) = &envelope.error {
-        println!("error: {} ({})", err.code.as_str(), err.message);
+        eprint_error_line(err);
         return;
     }
     for result in &envelope.results {
@@ -456,6 +556,12 @@ fn emit_query(json: bool, envelope: QueryEnvelope) -> i32 {
         .unwrap_or(0);
     if json {
         print!("{}", render_json(&envelope));
+    } else if let Some(err) = &envelope.error {
+        // D2/AC3: the human-mode error line is a stream-routing decision,
+        // not `render_human`'s concern (see that function's own doc
+        // comment) — `render_human` is only ever called below, on the
+        // success shape.
+        eprint_error_line(err);
     } else {
         print!("{}", render_human(&envelope));
     }
@@ -592,9 +698,36 @@ fn run_query_command(
         temp_base: std::env::temp_dir(),
     };
     let service = QueryService::new(RealProcessRunner, FileProbeStore::new(cache_path));
+    let spinner = start_query_spinner();
     let envelope = match service.query(request, QueryMode::Enforced) {
         Ok(envelope) => envelope,
         Err(e) => query_failure_envelope(None, None, e),
     };
+    // Cleared unconditionally, before either branch above touches
+    // stdout/stderr again (PRD 08-06-pre-0-1-0-cli-refinements AC2:
+    // "cleared before output," success or failure alike).
+    if let Some(pb) = spinner {
+        pb.finish_and_clear();
+    }
     emit_query(json, envelope)
+}
+
+/// Starts a stderr-only spinner for the duration of the blocking provider
+/// call (AC2), but only when stderr is an interactive terminal — an
+/// `assert_cmd`-driven test, a pipe, a redirect, or CI never satisfies this,
+/// so the spinner branch is unreachable from any automated test and never
+/// contaminates stdout/stderr byte-for-byte comparisons. `None` is returned,
+/// not a disabled/no-op spinner, so a non-interactive run never even
+/// constructs an `indicatif` handle.
+fn start_query_spinner() -> Option<indicatif::ProgressBar> {
+    if !std::io::stderr().is_terminal() {
+        return None;
+    }
+    let pb = indicatif::ProgressBar::new_spinner();
+    pb.set_draw_target(indicatif::ProgressDrawTarget::stderr());
+    if let Ok(style) = indicatif::ProgressStyle::with_template("{spinner} querying...") {
+        pb.set_style(style.tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "));
+    }
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+    Some(pb)
 }

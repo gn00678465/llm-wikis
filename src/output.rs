@@ -159,13 +159,21 @@ pub fn render_json(envelope: &QueryEnvelope) -> String {
 
 /// Renders the human-readable form: the answer, then gaps, then warnings, in that
 /// order (spec plan Task 4, Step 4).
+///
+/// Renders only the success shape (`answer`/`gaps`/`warnings`) — a failing
+/// envelope's human-readable error line is `cli.rs`'s responsibility, not
+/// this function's (PRD 08-06-pre-0-1-0-cli-refinements D2/AC3): the error
+/// line belongs on stderr, never stdout, and stream routing is a `cli.rs`
+/// concern this pure formatter does not own. Every `QueryEnvelope` this
+/// codebase constructs has `answer: None` exactly when `error: Some(_)`
+/// (see `query_failure_envelope`/`QueryService`'s own success/failure
+/// split), so `emit_query` never calls this function at all on a failing
+/// envelope — it renders the error line itself instead.
 pub fn render_human(envelope: &QueryEnvelope) -> String {
     let mut out = String::new();
     if let Some(answer) = &envelope.answer {
         out.push_str(answer);
         out.push('\n');
-    } else if let Some(err) = &envelope.error {
-        out.push_str(&format!("error: {} ({})\n", err.code.as_str(), err.message));
     }
     if !envelope.gaps.is_empty() {
         out.push_str("\nGaps:\n");
