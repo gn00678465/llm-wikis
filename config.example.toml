@@ -13,6 +13,13 @@
 #
 # `content_root` may equal `project_root` exactly (see the "agents" wiki
 # below) — containment is inclusive (specification §6.1).
+#
+# Windows paths: `\` is an escape character inside TOML's double-quoted
+# strings, so a path like C:\Wikis\example must be spelled one of three
+# ways: a single-quoted literal string ('C:\Wikis\example', no escaping at
+# all), a double-quoted string with doubled backslashes
+# ("C:\\Wikis\\example"), or forward slashes ("C:/Wikis/example", which
+# Windows also accepts). This file uses single-quoted literal strings below.
 
 config_version = 1
 default_agent = "claude"
@@ -33,8 +40,8 @@ max_stderr_bytes   = 65536
 # (.claude/skills/, .agents/skills/) live directly under the wiki root itself.
 [wikis.agents]
 title        = "Agents Knowledge Base"
-project_root = "D:/Wikis/agents"
-content_root = "D:/Wikis/agents"
+project_root = 'D:/Wikis/agents'
+content_root = 'D:/Wikis/agents'
 agents       = ["claude", "codex"]
 query_prompt = "Use the wiki-query skill to answer from this wiki."
 
@@ -55,8 +62,8 @@ skill_path = ".agents/skills/wiki-query/SKILL.md"
 # so .claude/ and .agents/ sit as siblings of content_root, not beneath it.
 [wikis.harness-engineering]
 title        = "Harness Engineering"
-project_root = "D:/Wikis/harness-engineering"
-content_root = "D:/Wikis/harness-engineering/wiki"
+project_root = 'D:/Wikis/harness-engineering'
+content_root = 'D:/Wikis/harness-engineering/wiki'
 agents       = ["claude", "codex"]
 query_prompt = "Use the llm-wiki skill's query workflow to answer from this wiki."
 

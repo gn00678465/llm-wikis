@@ -46,8 +46,9 @@ use crate::query::{QueryRequest, QueryService};
 #[derive(Parser)]
 #[command(name = "llm-wikis", version)]
 struct Cli {
-    /// Absolute-only override for the platform-native config path (spec
-    /// §5.2). Rejected (as `ARGUMENT_INVALID`) when relative.
+    /// Absolute path to the configuration file (overrides the platform default).
+    // Absolute-only override for the platform-native config path (spec
+    // §5.2). Rejected (as `ARGUMENT_INVALID`) when relative.
     #[arg(long, global = true, value_name = "PATH")]
     config: Option<PathBuf>,
     /// Emit exactly one JSON document instead of human-readable text.
@@ -73,19 +74,20 @@ enum CliCommand {
         live: bool,
     },
     Query {
-        /// Collected via `ArgAction::Append` (never silently overwritten by a
-        /// repeat) so a repeated `--wiki` is *detectable* after parsing,
-        /// rather than clap's default single-value behavior of quietly
-        /// keeping only the last occurrence (spec §5.1: "accepts one and
-        /// only one `--wiki`. Repeating it ... is an argument error").
+        /// The wiki ID to query (required, exactly one).
+        // Collected via `ArgAction::Append` (never silently overwritten by a
+        // repeat) so a repeated `--wiki` is *detectable* after parsing,
+        // rather than clap's default single-value behavior of quietly
+        // keeping only the last occurrence (spec §5.1: "accepts one and
+        // only one `--wiki`. Repeating it ... is an argument error").
         #[arg(long = "wiki", action = clap::ArgAction::Append, value_name = "ID")]
         wiki: Vec<String>,
         #[arg(long)]
         agent: Option<AgentArg>,
-        /// The question, supplied only after a literal `--` (spec §5.1).
-        /// `last = true` is what makes clap require that separator at all —
-        /// without it this would just be an ordinary (and, without `--`,
-        /// earlier-consumed) positional.
+        /// The question text, supplied after a literal `--` separator.
+        // `last = true` is what makes clap require that separator at all —
+        // without it this would just be an ordinary (and, without `--`,
+        // earlier-consumed) positional (spec §5.1).
         #[arg(last = true)]
         question: Option<String>,
     },
@@ -94,26 +96,28 @@ enum CliCommand {
 #[derive(Subcommand)]
 enum ConfigAction {
     Init,
-    /// Prints the resolved configuration (PRD 08-06-pre-0-1-0-cli-refinements
-    /// AC1, renamed from `show` to `list` per D7). "Resolved" means after
-    /// serde's own field-level defaulting (`Config::load`'s output as-is) —
-    /// never additionally filesystem-canonicalized per wiki, which stays
-    /// `doctor`'s job. clap derives this variant's kebab-case name as
-    /// `list`, which is unambiguous alongside the pre-existing top-level
-    /// `CliCommand::List` (the wiki registry listing) because the two live
-    /// at different subcommand depths: `llm-wikis list` versus
-    /// `llm-wikis config list` — clap requires the full `config` prefix to
-    /// reach this one, so there is no parse-time collision.
+    /// Print the resolved configuration.
+    // "Resolved" means after serde's own field-level defaulting
+    // (`Config::load`'s output as-is) — never additionally
+    // filesystem-canonicalized per wiki, which stays `doctor`'s job. clap
+    // derives this variant's kebab-case name as `list`, which is
+    // unambiguous alongside the pre-existing top-level `CliCommand::List`
+    // (the wiki registry listing) because the two live at different
+    // subcommand depths: `llm-wikis list` versus `llm-wikis config list` —
+    // clap requires the full `config` prefix to reach this one, so there is
+    // no parse-time collision.
     List,
-    /// Loads and validates the configuration, reporting ok/errors without
-    /// side effects (AC1). `doctor` is unchanged by this task (D1).
+    /// Validate the configuration without side effects.
+    // `doctor` covers environment/provider verification and is unchanged by
+    // this task.
     Validate,
 }
 
-/// A CLI-only mirror of [`Agent`] purely so `clap::ValueEnum` can be derived
-/// here without adding a clap dependency to `src/output.rs` (out of this
-/// task's file boundary). Variant names already lower-case to `claude`/
-/// `codex` under clap's default kebab-case rule, matching spec §5.1 exactly.
+/// The agent to use: `claude` or `codex`.
+// A CLI-only mirror of [`Agent`] purely so `clap::ValueEnum` can be derived
+// here without adding a clap dependency to `src/output.rs`. Variant names
+// already lower-case to `claude`/`codex` under clap's default kebab-case
+// rule, matching the CLI surface exactly.
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum AgentArg {
     Claude,
@@ -165,7 +169,21 @@ fn handle_parse_error(e: &clap::Error, args: &[OsString]) -> i32 {
         }
         _ => {
             let json_mode = args.iter().any(|a| a == "--json");
-            let err = AppError::new(ErrorCode::ArgumentInvalid, first_line(&e.to_string()));
+            let mut message = first_line(&e.to_string());
+            // PRD 08-07-first-run-config-and-query-ux-fixes D4: a bare
+            // `llm-wikis query "question"` (missing the required `--`
+            // separator, spec §5.1) reaches clap's generic
+            // "unexpected argument" wording with no guidance toward the
+            // correct shape. Scoped to the `query` subcommand's own usage
+            // line (rather than every `UnknownArgument`/etc. clap failure
+            // everywhere) by checking clap's own rendered `Usage:` line for
+            // the `query` token -- clap always renders the usage for the
+            // deepest subcommand matcher that was active when parsing
+            // failed, so this only fires for a `query`-scoped parse error.
+            if usage_line_mentions_query(e) {
+                message.push_str(&format!(" ({QUERY_USAGE_HINT})"));
+            }
+            let err = AppError::new(ErrorCode::ArgumentInvalid, message);
             emit_query(json_mode, query_failure_envelope(None, None, err))
         }
     }
@@ -173,6 +191,22 @@ fn handle_parse_error(e: &clap::Error, args: &[OsString]) -> i32 {
 
 fn first_line(s: &str) -> String {
     s.lines().next().unwrap_or(s).trim().to_string()
+}
+
+/// The correct invocation shape, shown alongside `query`'s own argument
+/// errors (PRD 08-07-first-run-config-and-query-ux-fixes D4). Guidance only
+/// -- the `--` requirement itself and every other parsing rule is unchanged.
+const QUERY_USAGE_HINT: &str = "try: llm-wikis query --wiki <id> -- \"<question>\"";
+
+/// True when clap's own rendered error carries a `Usage:` line naming the
+/// `query` subcommand -- i.e. the failure happened while matching arguments
+/// *within* `query`, not some other subcommand or the root command. clap
+/// always renders the usage line for the deepest matcher active at failure
+/// time, so this is a precise (not merely `args`-token-scanning) test.
+fn usage_line_mentions_query(e: &clap::Error) -> bool {
+    e.to_string()
+        .lines()
+        .any(|l| l.trim_start().starts_with("Usage:") && l.contains(" query "))
 }
 
 fn dispatch(cli: Cli) -> i32 {
@@ -632,15 +666,17 @@ fn run_query_command(
         [] => {
             return emit_query(
                 json,
-                argument_invalid_query("query requires exactly one --wiki"),
+                argument_invalid_query(format!(
+                    "query requires exactly one --wiki ({QUERY_USAGE_HINT})"
+                )),
             );
         }
         _ => {
             return emit_query(
                 json,
-                argument_invalid_query(
-                    "query accepts exactly one --wiki; repeating it or supplying \"all\" is invalid",
-                ),
+                argument_invalid_query(format!(
+                    "query accepts exactly one --wiki; repeating it or supplying \"all\" is invalid ({QUERY_USAGE_HINT})"
+                )),
             );
         }
     };

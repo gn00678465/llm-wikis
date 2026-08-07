@@ -218,6 +218,37 @@ fn help_prints_product_name_and_exits_zero() {
     assert!(stdout.contains("llm-wikis"), "{stdout}");
 }
 
+// PRD 08-07-first-run-config-and-query-ux-fixes AC5: every clap-visible
+// `///` doc comment is a short, user-facing one-liner -- the rationale
+// prose that used to leak into `--help` (worst case: `config list`/
+// `validate`'s full planning paragraphs) now lives only in `//` comments in
+// the source, never in rendered help text. Checked across the root command
+// and every subcommand, not just the two known offenders.
+#[test]
+fn help_output_never_leaks_internal_planning_markers() {
+    let forbidden = ["PRD", "AC1", "D7", "spec §", "checklist", "OFF-"];
+    let help_invocations: &[&[&str]] = &[
+        &["--help"],
+        &["list", "--help"],
+        &["doctor", "--help"],
+        &["query", "--help"],
+        &["config", "--help"],
+        &["config", "init", "--help"],
+        &["config", "list", "--help"],
+        &["config", "validate", "--help"],
+    ];
+    for args in help_invocations {
+        let assert = bin().args(*args).assert().success();
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+        for marker in forbidden {
+            assert!(
+                !stdout.contains(marker),
+                "{args:?} --help leaked internal marker {marker:?}:\n{stdout}"
+            );
+        }
+    }
+}
+
 #[test]
 fn unknown_subcommand_is_argument_invalid_not_a_panic() {
     let assert = bin().args(["skill", "foo"]).assert().failure().code(2);
@@ -644,6 +675,88 @@ fn query_missing_wiki_is_argument_invalid() {
         .code(2);
     let v = stdout_json(&assert);
     assert_eq!(v["error"]["code"], "ARGUMENT_INVALID");
+}
+
+// PRD 08-07-first-run-config-and-query-ux-fixes D4/AC3: both traps a
+// first-run user hits -- a bare positional question (missing the `--`
+// separator) and a `query -- "q"` with no `--wiki` -- now name the correct
+// invocation shape rather than leaving the caller with only clap's raw
+// "unexpected argument" text or a bare "requires exactly one --wiki". The
+// `--` requirement itself and the missing-`--wiki` rejection are unchanged
+// (still `ARGUMENT_INVALID`, still exit 2); only the message text changed.
+#[test]
+fn query_without_separator_names_the_correct_invocation_shape() {
+    let reg = minimal_registry(None, "\"claude\"");
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "query",
+            "--wiki",
+            "demo",
+            "question text with no -- separator",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let v = stdout_json(&assert);
+    assert_eq!(v["error"]["code"], "ARGUMENT_INVALID");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains(r#"llm-wikis query --wiki <id> -- "<question>""#),
+        "{message}"
+    );
+}
+
+#[test]
+fn query_missing_wiki_message_names_the_correct_invocation_shape() {
+    let reg = minimal_registry(None, "\"claude\"");
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "query",
+            "--",
+            "x",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let v = stdout_json(&assert);
+    assert_eq!(v["error"]["code"], "ARGUMENT_INVALID");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains(r#"llm-wikis query --wiki <id> -- "<question>""#),
+        "{message}"
+    );
+}
+
+#[test]
+fn query_without_separator_still_emits_exactly_one_json_document() {
+    let reg = minimal_registry(None, "\"claude\"");
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "query",
+            "--wiki",
+            "demo",
+            "question text with no -- separator",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        text.matches('\n').count(),
+        1,
+        "exactly one line of output: {text:?}"
+    );
+    assert!(out.stderr.is_empty());
 }
 
 #[test]

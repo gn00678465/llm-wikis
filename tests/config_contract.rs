@@ -206,6 +206,73 @@ fn two_wiki_registry_matches_section_6_example() {
     );
 }
 
+// PRD 08-07-first-run-config-and-query-ux-fixes D2/AC1: `config.example.toml`
+// gets the same single-quoted-path treatment as the `config init` template,
+// plus its own copy of the Windows path-quoting note.
+#[test]
+fn config_example_toml_uses_single_quoted_paths_with_a_windows_quoting_note() {
+    let text = include_str!("../config.example.toml");
+    assert!(text.contains("project_root = 'D:/Wikis/agents'"), "{text}");
+    assert!(text.contains("content_root = 'D:/Wikis/agents'"), "{text}");
+    assert!(
+        text.contains("project_root = 'D:/Wikis/harness-engineering'"),
+        "{text}"
+    );
+    assert!(
+        text.contains("content_root = 'D:/Wikis/harness-engineering/wiki'"),
+        "{text}"
+    );
+    assert!(
+        text.contains("single-quoted literal string"),
+        "expected a Windows path-quoting note: {text}"
+    );
+}
+
+// PRD 08-07-first-run-config-and-query-ux-fixes D3/AC2: a hand-edited config
+// with an unescaped backslash inside a TOML basic (double-quoted) string --
+// the exact trap a Windows user hits pasting `content_root =
+// "E:\not_company\..."` -- must fail `CONFIG_INVALID` with a message that
+// also names the three legal spellings. Every other TOML parse failure
+// (unclosed table, missing value, ...) keeps its original message shape.
+#[test]
+fn backslash_escape_toml_error_carries_the_windows_path_hint() {
+    let text = "content_root = \"E:\\not_company\\wiki\"\n";
+    let err = Config::load_str(text).unwrap_err();
+    assert_eq!(err.code, ErrorCode::ConfigInvalid);
+    assert!(
+        err.message.contains("single-quoted literal string"),
+        "{}",
+        err.message
+    );
+    assert!(err.message.contains("forward slashes"), "{}", err.message);
+    assert!(
+        err.message.contains("double the backslashes") || err.message.contains("doubled"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn non_escape_toml_errors_do_not_carry_the_windows_path_hint() {
+    let unclosed_table = "[wikis.demo\n";
+    let err = Config::load_str(unclosed_table).unwrap_err();
+    assert_eq!(err.code, ErrorCode::ConfigInvalid);
+    assert!(
+        !err.message.contains("single-quoted literal string"),
+        "{}",
+        err.message
+    );
+
+    let missing_value = "content_root = \n";
+    let err2 = Config::load_str(missing_value).unwrap_err();
+    assert_eq!(err2.code, ErrorCode::ConfigInvalid);
+    assert!(
+        !err2.message.contains("single-quoted literal string"),
+        "{}",
+        err2.message
+    );
+}
+
 #[test]
 fn unknown_top_level_key_rejected() {
     let text = format!("{BASE_HEADER}\nquery_profiles = []\n");

@@ -820,6 +820,16 @@ fn probe_gate_enforced_mode_absent_record() {
     let err = envelope.error.unwrap();
     assert_eq!(err.code, ErrorCode::EntrypointUnverified);
     assert_eq!(err.code.exit_code(), 3);
+    // PRD 08-07-first-run-config-and-query-ux-fixes D5/AC4: the message
+    // names the remedial command, with the real wiki/agent selectors (both
+    // are already in scope at every gate-failure call site).
+    assert!(
+        err.message.contains(&format!(
+            "llm-wikis doctor --wiki {WIKI_ID} --agent claude --live"
+        )),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
@@ -846,9 +856,14 @@ fn probe_gate_enforced_mode_mismatched_record() {
         .expect("Ok envelope");
 
     assert!(!envelope.ok);
-    assert_eq!(
-        envelope.error.unwrap().code,
-        ErrorCode::EntrypointUnverified
+    let err = envelope.error.unwrap();
+    assert_eq!(err.code, ErrorCode::EntrypointUnverified);
+    assert!(
+        err.message.contains(&format!(
+            "llm-wikis doctor --wiki {WIKI_ID} --agent claude --live"
+        )),
+        "{}",
+        err.message
     );
 }
 

@@ -820,7 +820,7 @@ Failure:
   "raw_format": null,
   "error": {
     "code": "ENTRYPOINT_UNVERIFIED",
-    "message": "The selected entrypoint fingerprint has not passed a current live doctor probe."
+    "message": "the selected entrypoint fingerprint has not passed a current live doctor probe -- run `llm-wikis doctor --wiki agents --agent claude --live` first"
   }
 }
 ```

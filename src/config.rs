@@ -418,10 +418,34 @@ impl Config {
 
     /// Parses and validates configuration text directly (no filesystem access).
     pub fn load_str(text: &str) -> Result<Config, AppError> {
-        let config: Config = toml::from_str(text)
-            .map_err(|e| config_invalid(format!("configuration is not valid TOML: {e}")))?;
+        let config: Config =
+            toml::from_str(text).map_err(|e| config_invalid(toml_parse_error_message(&e)))?;
         config.validate()?;
         Ok(config)
+    }
+}
+
+/// PRD 08-07-first-run-config-and-query-ux-fixes D3: a hand-edited config with
+/// an unescaped Windows path in a TOML basic (double-quoted) string — e.g.
+/// `content_root = "E:\not_company\..."` — fails with the `toml` crate's own
+/// "missing escaped value" parse error, which by itself gives no clue that
+/// three legal spellings exist. Detected conservatively by matching the
+/// stable marker phrase the `toml` 0.9 parser emits for this exact error
+/// class (confirmed against the live crate: `toml::from_str` on
+/// `content_root = "E:\not_company\wiki"` — verified interactively, not
+/// hardcoded from documentation) rather than trying to re-parse the error's
+/// span/structure. Every other TOML parse failure (unclosed table, missing
+/// value, duplicate key, ...) keeps its original message shape unchanged.
+fn toml_parse_error_message(e: &toml::de::Error) -> String {
+    let base = format!("configuration is not valid TOML: {e}");
+    if e.to_string().contains("missing escaped value") {
+        format!(
+            "{base} -- Windows paths in double-quoted TOML strings must escape \
+`\\`: use a single-quoted literal string ('C:\\path'), double the backslashes \
+in a double-quoted string (\"C:\\\\path\"), or use forward slashes (\"C:/path\")"
+        )
+    } else {
+        base
     }
 }
 
@@ -1032,10 +1056,18 @@ max_stderr_bytes   = 65536
 
 # Example wiki (edit the paths and prompt, then uncomment to register it):
 #
+# Windows paths: `\` is an escape character inside TOML's double-quoted
+# strings, so a path like C:\Wikis\example must be spelled one of three
+# ways: a single-quoted literal string ('C:\Wikis\example', no escaping at
+# all), a double-quoted string with doubled backslashes
+# ("C:\\Wikis\\example"), or forward slashes ("C:/Wikis/example", which
+# Windows also accepts). This template uses single-quoted literal strings
+# below.
+#
 # [wikis.example]
 # title        = "Example Knowledge Base"
-# project_root = "/absolute/path/to/example"
-# content_root = "/absolute/path/to/example"
+# project_root = '/absolute/path/to/example'
+# content_root = '/absolute/path/to/example'
 # agents       = ["claude"]
 # query_prompt = "Use the wiki-query skill to answer from this wiki."
 #

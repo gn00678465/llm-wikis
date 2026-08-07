@@ -345,10 +345,21 @@ pub fn load_mode_str(load: LoadMode) -> &'static str {
     }
 }
 
-fn entrypoint_unverified() -> AppError {
+/// PRD 08-07-first-run-config-and-query-ux-fixes D5: a static `doctor` pass
+/// followed by `query` failing `ENTRYPOINT_UNVERIFIED` with no next step
+/// left an operator stuck (user repro 3, 2026-08-07) -- the live fingerprint
+/// gate (spec §8.1 step 8) is unchanged, only its message now names the
+/// remedial command. `wiki_id`/`agent` are always in scope at every call
+/// site below (both come from the already-resolved `request`/`agent`
+/// bindings), so the hint always carries the real selectors rather than a
+/// generic placeholder.
+fn entrypoint_unverified(wiki_id: &str, agent: Agent) -> AppError {
     AppError::new(
         ErrorCode::EntrypointUnverified,
-        "the selected entrypoint fingerprint has not passed a current live doctor probe",
+        format!(
+            "the selected entrypoint fingerprint has not passed a current live doctor probe -- run `llm-wikis doctor --wiki {wiki_id} --agent {} --live` first",
+            agent_command_name(agent)
+        ),
     )
 }
 
@@ -635,12 +646,12 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
                 let record = self
                     .probes
                     .current_record(&key)?
-                    .ok_or_else(entrypoint_unverified)?;
+                    .ok_or_else(|| entrypoint_unverified(&request.wiki_id, agent))?;
                 if record.agent_executable != executable.path.display().to_string() {
-                    return Err(entrypoint_unverified());
+                    return Err(entrypoint_unverified(&request.wiki_id, agent));
                 }
                 if record.agent_version != version {
-                    return Err(entrypoint_unverified());
+                    return Err(entrypoint_unverified(&request.wiki_id, agent));
                 }
                 let skill_dir = skill_fingerprint_dir(
                     &request.config_dir,
@@ -649,7 +660,7 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
                 )?;
                 let current_skill_fingerprint = compute_skill_fingerprint(&skill_dir)?;
                 if record.skill_fingerprint != current_skill_fingerprint {
-                    return Err(entrypoint_unverified());
+                    return Err(entrypoint_unverified(&request.wiki_id, agent));
                 }
                 let compat_input = CompatibilityFingerprintInput {
                     wiki_id: &request.wiki_id,
@@ -668,7 +679,7 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
                 let current_compatibility_fingerprint =
                     compute_compatibility_fingerprint(&compat_input);
                 if record.compatibility_fingerprint != current_compatibility_fingerprint {
-                    return Err(entrypoint_unverified());
+                    return Err(entrypoint_unverified(&request.wiki_id, agent));
                 }
                 Ok(())
             })();
