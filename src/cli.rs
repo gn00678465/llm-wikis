@@ -170,18 +170,20 @@ fn handle_parse_error(e: &clap::Error, args: &[OsString]) -> i32 {
         _ => {
             let json_mode = args.iter().any(|a| a == "--json");
             let mut message = first_line(&e.to_string());
-            // PRD 08-07-first-run-config-and-query-ux-fixes D4: a bare
-            // `llm-wikis query "question"` (missing the required `--`
+            // A bare `llm-wikis query "question"` (missing the required `--`
             // separator, spec §5.1) reaches clap's generic
             // "unexpected argument" wording with no guidance toward the
-            // correct shape. Scoped to the `query` subcommand's own usage
-            // line (rather than every `UnknownArgument`/etc. clap failure
-            // everywhere) by checking clap's own rendered `Usage:` line for
-            // the `query` token -- clap always renders the usage for the
-            // deepest subcommand matcher that was active when parsing
-            // failed, so this only fires for a `query`-scoped parse error.
-            if usage_line_mentions_query(e) {
-                message.push_str(&format!(" ({QUERY_USAGE_HINT})"));
+            // correct shape; a multi-value/repeated `--agent` on `doctor`
+            // (e.g. `--agent claude,codex` or `--agent claude --agent
+            // codex`) similarly reaches clap's generic wording with no
+            // reminder that `doctor --live` only ever checks one (wiki,
+            // agent) pair per run. Both are scoped to their own
+            // subcommand -- never applied to a parse failure in some other
+            // subcommand or the root command -- via `hint_subcommand`.
+            match hint_subcommand(e, args) {
+                Some("query") => message.push_str(&format!(" ({QUERY_USAGE_HINT})")),
+                Some("doctor") => message.push_str(&format!(" ({DOCTOR_USAGE_HINT})")),
+                _ => {}
             }
             let err = AppError::new(ErrorCode::ArgumentInvalid, message);
             emit_query(json_mode, query_failure_envelope(None, None, err))
@@ -194,19 +196,86 @@ fn first_line(s: &str) -> String {
 }
 
 /// The correct invocation shape, shown alongside `query`'s own argument
-/// errors (PRD 08-07-first-run-config-and-query-ux-fixes D4). Guidance only
-/// -- the `--` requirement itself and every other parsing rule is unchanged.
+/// errors. Guidance only -- the `--` requirement itself and every other
+/// parsing rule is unchanged.
 const QUERY_USAGE_HINT: &str = "try: llm-wikis query --wiki <id> -- \"<question>\"";
 
-/// True when clap's own rendered error carries a `Usage:` line naming the
-/// `query` subcommand -- i.e. the failure happened while matching arguments
-/// *within* `query`, not some other subcommand or the root command. clap
-/// always renders the usage line for the deepest matcher active at failure
-/// time, so this is a precise (not merely `args`-token-scanning) test.
-fn usage_line_mentions_query(e: &clap::Error) -> bool {
+/// Shown alongside `doctor`'s own argument errors when an operator tries to
+/// pass more than one agent in a single `--agent` (a comma-separated value,
+/// or a repeated flag). Guidance only -- `doctor --live` still checks
+/// exactly one (wiki, agent) pair per invocation; run it once per agent.
+const DOCTOR_USAGE_HINT: &str = "doctor runs one wiki/agent pair at a time; run it once per agent, e.g. llm-wikis doctor --wiki <id> --agent claude --live";
+
+/// Identifies which subcommand's argument parsing produced `e`, so its
+/// argument-error message can carry that subcommand's own usage hint (never
+/// another subcommand's, and never one at all for a parse failure that
+/// precedes subcommand resolution, e.g. an unrecognized top-level
+/// subcommand name).
+///
+/// Two clap error shapes need two different detection strategies here.
+/// Some kinds (e.g. `ArgumentConflict`, produced by a repeated
+/// non-repeatable `--agent`) render a `Usage:` line naming the deepest
+/// subcommand matcher active at failure time -- checked first, since it is
+/// clap's own authoritative answer. Other kinds (`InvalidValue`, produced
+/// by `--agent claude,codex`: clap's `ValueEnum` parser rejects the whole
+/// comma-joined string as not matching any single variant) render no
+/// `Usage:` line at all -- confirmed empirically for both `doctor --agent
+/// claude,codex` and `query --agent claude,codex`, whose rendered
+/// `clap::Error::to_string()` and `.context()` are byte-for-byte identical
+/// aside from the value itself, carrying no subcommand information
+/// whatsoever (`--agent` is declared identically on both subcommands). For
+/// that shape, the raw invocation argv is the only remaining source of
+/// truth, so this falls back to `subcommand_from_args`.
+fn hint_subcommand(e: &clap::Error, args: &[OsString]) -> Option<&'static str> {
+    if usage_line_mentions(e, "query") {
+        Some("query")
+    } else if usage_line_mentions(e, "doctor") {
+        Some("doctor")
+    } else {
+        subcommand_from_args(args)
+    }
+}
+
+/// True when clap's own rendered error carries a `Usage:` line naming
+/// `subcommand` -- i.e. the failure happened while matching arguments
+/// *within* that subcommand, not some other subcommand or the root command.
+/// clap always renders the usage line for the deepest matcher active at
+/// failure time, so this is a precise (not merely `args`-token-scanning)
+/// test when it fires at all (see `hint_subcommand`'s doc comment for the
+/// error kinds that render no `Usage:` line whatsoever).
+fn usage_line_mentions(e: &clap::Error, subcommand: &str) -> bool {
     e.to_string()
         .lines()
-        .any(|l| l.trim_start().starts_with("Usage:") && l.contains(" query "))
+        .any(|l| l.trim_start().starts_with("Usage:") && l.contains(&format!(" {subcommand} ")))
+}
+
+/// The `hint_subcommand` fallback for clap error kinds that render no
+/// `Usage:` line (see its doc comment). Walks the raw argv looking for the
+/// first bare (non-`--flag`) token, skipping only `--config`'s own value
+/// (the one global flag that consumes a following token before the
+/// subcommand name itself can appear) -- exactly the shape every real
+/// invocation of this CLI takes: `llm-wikis [--json] [--config PATH]
+/// <subcommand> ...`. Returns `None` for anything else (an unrecognized
+/// subcommand name, or no bare token at all), so an unrelated parse failure
+/// never picks up either hint.
+fn subcommand_from_args(args: &[OsString]) -> Option<&'static str> {
+    let mut iter = args.iter().skip(1);
+    while let Some(arg) = iter.next() {
+        let token = arg.to_string_lossy();
+        if token == "--config" {
+            iter.next();
+            continue;
+        }
+        if token.starts_with("--") {
+            continue;
+        }
+        return match token.as_ref() {
+            "doctor" => Some("doctor"),
+            "query" => Some("query"),
+            _ => None,
+        };
+    }
+    None
 }
 
 fn dispatch(cli: Cli) -> i32 {

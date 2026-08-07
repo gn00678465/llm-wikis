@@ -759,6 +759,143 @@ fn query_without_separator_still_emits_exactly_one_json_document() {
     assert!(out.stderr.is_empty());
 }
 
+// PRD 08-07-first-run-config-and-query-ux-fixes D8: a first-run operator
+// trying to check more than one agent in a single `doctor --live` (either a
+// comma-separated `--agent claude,codex`, or a repeated `--agent claude
+// --agent codex`) hits two different clap error kinds -- `InvalidValue`
+// (comma-separated: `--agent` is a `ValueEnum`, so the whole joined string
+// fails to match either variant) and `ArgumentConflict` (repeated: the flag
+// itself isn't repeatable) -- and both now carry a reminder that `doctor
+// --live` checks exactly one (wiki, agent) pair per run, rather than
+// clap's bare "invalid value"/"cannot be used multiple times" text alone.
+// Neither changes the `--live` one-pair-per-run requirement itself, the
+// `ARGUMENT_INVALID` code, or the exit code (2) -- message text only. A
+// bogus `--config` path is enough here: this is a pure clap parse failure,
+// never reaching config resolution at all.
+#[test]
+fn doctor_comma_separated_agent_value_names_the_one_pair_per_run_rule() {
+    let (_tmp, config_path) = nonexistent_config_path();
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            config_path.to_str().unwrap(),
+            "doctor",
+            "--wiki",
+            "demo",
+            "--agent",
+            "claude,codex",
+            "--live",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let v = stdout_json(&assert);
+    assert_eq!(v["error"]["code"], "ARGUMENT_INVALID");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("doctor runs one wiki/agent pair at a time"),
+        "{message}"
+    );
+    assert!(
+        message.contains("llm-wikis doctor --wiki <id> --agent claude --live"),
+        "{message}"
+    );
+}
+
+#[test]
+fn doctor_repeated_agent_flag_names_the_one_pair_per_run_rule() {
+    let (_tmp, config_path) = nonexistent_config_path();
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            config_path.to_str().unwrap(),
+            "doctor",
+            "--wiki",
+            "demo",
+            "--agent",
+            "claude",
+            "--agent",
+            "codex",
+            "--live",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let v = stdout_json(&assert);
+    assert_eq!(v["error"]["code"], "ARGUMENT_INVALID");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("doctor runs one wiki/agent pair at a time"),
+        "{message}"
+    );
+}
+
+/// `doctor --live` still emits exactly one JSON document for this error
+/// shape too (same contract as `query_without_separator_still_emits_exactly_one_json_document`).
+#[test]
+fn doctor_comma_separated_agent_value_still_emits_exactly_one_json_document() {
+    let (_tmp, config_path) = nonexistent_config_path();
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            config_path.to_str().unwrap(),
+            "doctor",
+            "--wiki",
+            "demo",
+            "--agent",
+            "claude,codex",
+            "--live",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        text.matches('\n').count(),
+        1,
+        "exactly one line of output: {text:?}"
+    );
+    assert!(out.stderr.is_empty());
+}
+
+/// `query`'s own comma-separated `--agent` error is the same clap
+/// `InvalidValue` kind as doctor's, sharing the exact `--agent` declaration
+/// -- deliberately gets `query`'s own D4 usage hint (never doctor's), since
+/// it is a `query`-scoped parse failure.
+#[test]
+fn query_comma_separated_agent_value_gets_the_query_usage_hint_not_doctors() {
+    let reg = minimal_registry(None, "\"claude\"");
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "query",
+            "--agent",
+            "claude,codex",
+            "--",
+            "q",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let v = stdout_json(&assert);
+    assert_eq!(v["error"]["code"], "ARGUMENT_INVALID");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains(r#"llm-wikis query --wiki <id> -- "<question>""#),
+        "{message}"
+    );
+    assert!(
+        !message.contains("doctor runs one wiki/agent pair at a time"),
+        "{message}"
+    );
+}
+
 #[test]
 fn query_rejects_both_positional_and_stdin() {
     let reg = minimal_registry(None, "\"claude\"");
