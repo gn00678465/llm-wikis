@@ -29,6 +29,11 @@ task status manually — statuses and next steps are all defined there.
 - In the Bash tool environment on this machine, `cargo` can resolve to a
   broken chocolatey shim; if cargo commands fail oddly, check `which cargo`
   / correct PATH (or use PowerShell) before debugging the build itself.
+- On clap-derived items in src/cli.rs, `///` doc comments BECOME the
+  user-facing `--help` text. Rationale, spec citations, and task/decision
+  references go in `//` comments; keep `///` to a short imperative
+  one-liner. `tests/cli_contract.rs::help_output_never_leaks_internal_planning_markers`
+  pins this.
 
 ## Historical archives
 

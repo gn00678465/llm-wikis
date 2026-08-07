@@ -1,0 +1,4 @@
+{"reason":"seed row — add real entries via: task.ts add-context <name> <implement|check> <file> <reason>"}
+{"file":"tests/cli_contract.rs","reason":"pins ARGUMENT_INVALID messages; add coverage for the new usage hints"}
+{"file":"tests/config_init.rs","reason":"pins the init template content; must follow the quoting change"}
+{"file":"tests/query_service.rs","reason":"pins the ENTRYPOINT_UNVERIFIED gate; message assertion must follow D5"}
