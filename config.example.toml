@@ -38,6 +38,9 @@ content_root = "D:/Wikis/agents"
 agents       = ["claude", "codex"]
 query_prompt = "Use the wiki-query skill to answer from this wiki."
 
+# The referenced SKILL.md must declare `allowed-tools: Read, Grep, Glob`
+# in its own frontmatter, or --permission-mode dontAsk denies its reads
+# mid-turn (docs/llm-wikis.md §2.7a).
 [wikis.agents.claude]
 load       = "project_skill"
 entrypoint = "/wiki-query"

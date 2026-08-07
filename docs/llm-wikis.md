@@ -359,6 +359,33 @@ at the user level outside `llm-wikis`, it would never be consulted: Codex
 user configuration (and therefore any user-level plugin) is deliberately
 excluded from every query and doctor invocation.
 
+### 2.7a Claude wiki skills must declare `allowed-tools`
+
+`llm-wikis` invokes Claude with `--permission-mode dontAsk` (§3.4) — no
+approval prompt is ever shown, so a tool call that isn't already authorized
+is simply **denied**, not deferred. During the `/wiki-query` (or your
+wiki's own) skill turn, that authorization comes from the skill's own
+**`SKILL.md` `allowed-tools` frontmatter**, not from `--tools` alone. A
+wiki skill that omits `allowed-tools` gets its `Read`/`Grep`/`Glob` calls
+denied mid-turn, and the model falls back to an "unable to access wiki
+pages" answer instead of a grounded one — live-verified on Claude Code
+2.1.223 (2026-08-07): adding the frontmatter line fixed it immediately,
+with no other change. This holds regardless of `--setting-sources` (§3.4,
+layer 9) — verified identical before and after that flag was added.
+
+Every wiki you register for the Claude provider must therefore declare, in
+its skill's `SKILL.md` frontmatter:
+
+```yaml
+allowed-tools: Read, Grep, Glob
+```
+
+This is authoring guidance for the wiki's own skill file, not an
+`llm-wikis` configuration key — there is nothing to set in `config.toml`
+for it. Codex is unaffected: its read access comes from the read-only
+sandbox (§3.4, layer 10; §3.6), not from skill frontmatter, so no
+equivalent declaration is needed for `$name` entrypoints.
+
 ### 2.8 `llm-wikis` never modifies a knowledge base
 
 State this plainly to anyone operating this tool: **`llm-wikis` itself has
