@@ -108,6 +108,70 @@ llm-wikis query --wiki my-wiki --agent claude -- "What does the ingest pipeline 
 Full command reference, JSON output shape, and error codes:
 [`docs/llm-wikis.md`](docs/llm-wikis.md).
 
+## Development
+
+### Build from source
+
+Requires [rustup](https://rustup.rs/); `rust-toolchain.toml` pins the
+toolchain (MSRV 1.97, edition 2024) and the first `cargo` invocation
+installs it automatically.
+
+```sh
+git clone https://github.com/gn00678465/llm-wikis.git
+cd llm-wikis
+cargo build --release
+# binary at target/release/llm-wikis(.exe)
+```
+
+### Automated checks (same three gates as CI)
+
+```sh
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features -- --test-threads=1
+```
+
+Notes:
+
+- Tests must run with `--test-threads=1` (CI does too).
+- The `tests/process_supervisor.rs` binary takes ~12-16 minutes and
+  contains two 400ms deadline-race tests
+  (`grandchild_termination_kills_both_pids`, `windows_job_object`) that
+  fail intermittently on high-latency/sandboxed machines. That is a timing
+  race, not a regression — treat a failure there as real only if
+  `src/process.rs` or that test file changed.
+
+### Live verification (real providers)
+
+Requires an installed, logged-in Claude Code and/or Codex CLI.
+
+```sh
+llm-wikis config init                                  # write the template, then register your wiki
+llm-wikis config validate                              # check the registry
+llm-wikis config list                                  # inspect the resolved config
+llm-wikis doctor --wiki <id> --agent claude            # static checks
+llm-wikis doctor --wiki <id> --agent claude --live     # real provider probe; records the probe query needs
+llm-wikis query  --wiki <id> --agent claude -- "your question"
+llm-wikis --json query --wiki <id> --agent claude -- "your question"
+```
+
+A successful run keeps the answer (or the single `--json` document) on
+stdout only; progress and human-readable errors go to stderr, and a JSON
+answer is `ok:true` with `knowledge_status:"grounded"` and citations that
+resolve to wiki pages.
+
+Three setup pitfalls worth knowing up front:
+
+1. A wiki must not live under the system temp directory — the temp-root
+   disjointness guard rejects the run (exit 70) by design.
+2. A Claude wiki skill's `SKILL.md` must declare
+   `allowed-tools: Read, Grep, Glob`, or every read is denied during the
+   skill turn and answers degrade to "unable to access wiki pages" — see
+   `docs/llm-wikis.md` §2.7a.
+3. When scripting `query` with a positional question, redirect stdin
+   (`< /dev/null`) if the caller's stdin is a pipe that never closes —
+   the dual-input check reads stdin to EOF before any provider work.
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE).

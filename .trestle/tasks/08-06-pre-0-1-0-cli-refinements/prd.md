@@ -114,6 +114,12 @@ Four refinements requested before the v0.1.0 stable release:
   are denied. Live-verified 2026-08-07 (evidence/live-verification-
   2026-08-07.md finding 3); confirmed NOT a D6 regression (operator user
   settings carry zero allow rules). Docs-only, round 3. (User, 2026-08-07.)
+- D9: README.md gains a `## Development` section (build-from-source, the
+  three CI gates with the process_supervisor flake caveat, live
+  verification steps, and the three verified setup pitfalls) — user
+  request after round 3 closed; docs-only, applied directly with the
+  round budget exhausted (3/3), no gate rerun needed beyond none of the
+  gated files being touched. (User, 2026-08-07.)
 
 ## Research findings (research/provider-cli-flags.md, verified on claude 2.1.223 / codex-cli 0.146.0)
 
