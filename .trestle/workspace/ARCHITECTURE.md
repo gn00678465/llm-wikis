@@ -80,7 +80,11 @@ answer with citations via the output contract.
   `Skill`: live-verified (claude 2.1.223, twice) that its presence makes the
   model call the Skill tool instead of relying on CLI-side `/wiki-query`
   text expansion, which `--permission-mode dontAsk` then denies with no
-  fallback. (Task 08-06-pre-0-1-0-cli-refinements research §3, D4.)
+  fallback. (Task 08-06-pre-0-1-0-cli-refinements research §3, D4.) The
+  complementary wiki-side requirement: a Claude wiki skill must declare
+  `allowed-tools: Read, Grep, Glob` in SKILL.md frontmatter or its reads
+  are denied during the skill turn under `dontAsk` — live-verified
+  2026-08-07, documented for operators in docs/llm-wikis.md §2.7a (D8).
 - Provider directive channels are argv-level, not prompt-envelope-level:
   Claude `--append-system-prompt`, Codex `-c developer_instructions=<text>`
   (additive; `-c` values are TOML-parsed so directive text must round-trip —

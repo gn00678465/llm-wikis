@@ -1,0 +1,164 @@
+{
+  "taskName": "08-06-pre-0-1-0-cli-refinements",
+  "round": 3,
+  "verdict": "block",
+  "gates": [
+    {
+      "id": "AC1",
+      "category": "ac",
+      "ok": false,
+      "detail": "not checked: AC1: `config list` and `config validate` subcommands exist. `list` loads and prints the resolved configuration; `validate` loads the config and reports ok/errors without side effects. Both honor `--config` and `--json` (one JSON document on stdout, matching the existing envelope conventions) and map errors to the existing error-code/exit-code scheme. `doctor` is unchanged."
+    },
+    {
+      "id": "AC2",
+      "category": "ac",
+      "ok": false,
+      "detail": "not checked: AC2: `llm-wikis query` shows an indicatif spinner while the provider call runs, only when stderr is an interactive terminal; the spinner is written to stderr and cleared before output. stdout carries only the answer (human) or the single JSON document (`--json`). Piped/redirected/ CI runs produce byte-identical stdout to today (minus item-3 prompt effects) and no spinner bytes anywhere."
+    },
+    {
+      "id": "AC3",
+      "category": "ac",
+      "ok": false,
+      "detail": "not checked: AC3: Human-readable error lines for ALL subcommands print to stderr (`eprintln!`); `--json` failure envelopes stay on stdout. Spec and contract tests updated accordingly."
+    },
+    {
+      "id": "AC4",
+      "category": "ac",
+      "ok": false,
+      "detail": "not checked: AC4: Claude argv includes `--append-system-prompt \"<directives>\"`; Codex argv includes `-c developer_instructions=<directives>` with text that round-trips TOML parsing. Directives: answer directly and stop; no save/persist questions; no updates to wiki/index/frontmatter/log; no follow-up questions unanswerable in a non-interactive CLI."
+    },
+    {
+      "id": "AC5",
+      "category": "ac",
+      "ok": false,
+      "detail": "not checked: AC5: Claude argv includes `--setting-sources project` alongside the existing `--settings {\"disableAllHooks\":true}`. `TOOLS` stays `Read,Grep,Glob` (no `Skill`)."
+    },
+    {
+      "id": "AC6",
+      "category": "ac",
+      "ok": false,
+      "detail": "not checked: AC6: `cargo fmt --check`, `cargo clippy --all-targets --all-features tests; the design spec is updated wherever argv/output contracts changed."
+    },
+    {
+      "id": "verify-1",
+      "category": "verification",
+      "ok": false,
+      "detail": "exit 4294967295: cargo fmt --all --check"
+    },
+    {
+      "id": "verify-2",
+      "category": "verification",
+      "ok": false,
+      "detail": "exit 4294967295: cargo clippy --all-targets --all-features -- -D warnings"
+    },
+    {
+      "id": "verify-3",
+      "category": "verification",
+      "ok": false,
+      "detail": "exit 4294967295: cargo test --all-targets --all-features -- --test-threads=1"
+    },
+    {
+      "id": "scope-config.example.toml",
+      "category": "scope",
+      "ok": false,
+      "detail": "out of declared scope: config.example.toml"
+    },
+    {
+      "id": "scope-docs/llm-wikis.md",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: docs/llm-wikis.md"
+    },
+    {
+      "id": "G1",
+      "category": "custom",
+      "ok": false,
+      "detail": "exit 4294967295: cargo fmt --all --check"
+    },
+    {
+      "id": "G2",
+      "category": "custom",
+      "ok": false,
+      "detail": "exit 4294967295: cargo clippy --all-targets --all-features -- -D warnings"
+    },
+    {
+      "id": "G3",
+      "category": "custom",
+      "ok": false,
+      "detail": "exit 4294967295: cargo test --all-targets --all-features -- --test-threads=1"
+    },
+    {
+      "id": "G4",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"pub const TOOLS: &str = \\\"Read,Grep,Glob\\\";\" src/providers/claude.rs"
+    },
+    {
+      "id": "G5",
+      "category": "custom",
+      "ok": false,
+      "detail": "exit 2: rg -F \"--append-system-prompt\" src/providers/claude.rs"
+    },
+    {
+      "id": "G6",
+      "category": "custom",
+      "ok": false,
+      "detail": "exit 2: rg -F \"--setting-sources\" src/providers/claude.rs"
+    },
+    {
+      "id": "G7",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"developer_instructions=\" src/providers/codex.rs"
+    },
+    {
+      "id": "G8",
+      "category": "custom",
+      "ok": false,
+      "detail": "exit 1: rg -F \"pub fn config_show_envelope\" src/config.rs"
+    },
+    {
+      "id": "G9",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"pub fn config_validate_envelope\" src/config.rs"
+    },
+    {
+      "id": "G10",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"indicatif\" Cargo.toml"
+    },
+    {
+      "id": "G11",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"fn eprint_error_line\" src/cli.rs"
+    },
+    {
+      "id": "G12",
+      "category": "custom",
+      "ok": false,
+      "detail": "exit 1: --tools"
+    },
+    {
+      "id": "G13",
+      "category": "custom",
+      "ok": false,
+      "detail": "exit 1: NON_INTERACTIVE_SYSTEM_DIRECTIVES"
+    },
+    {
+      "id": "G14",
+      "category": "custom",
+      "ok": false,
+      "detail": "exit 1: docs/2026-07-28-llm-wikis-external-query-design.md"
+    },
+    {
+      "id": "G15",
+      "category": "custom",
+      "ok": false,
+      "detail": "exit 1: tests/prompt_envelope.rs"
+    }
+  ],
+  "manual": []
+}

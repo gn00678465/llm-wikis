@@ -11,6 +11,8 @@
 | `AGENTS.md` (Working rules) | Added: checklist.md gate-command authoring pitfalls (`rg -F` needs `--` before leading-dash patterns; prose rows mis-executed by gates.ts) | Round-1 evaluation produced false gate blocks from exactly these two authoring mistakes |
 | `AGENTS.md` (Working rules) | Added: Bash-tool `cargo` can resolve to a broken chocolatey shim on this machine | Evaluator lost a run to it; one line saves the next agent the same detour |
 
+| `.trestle/workspace/ARCHITECTURE.md` (Key decisions) | Extended the no-Skill bullet with the wiki-side `allowed-tools: Read, Grep, Glob` SKILL.md requirement (D8, live-verified 2026-08-07, operator doc §2.7a) | Round-3 addition: the two halves of the Claude skill-turn permission story belong in one place |
+
 ## Nothing to record
 
 - PRODUCT.md: reviewed: prd.md Decisions D1-D6 and the phase-goal section

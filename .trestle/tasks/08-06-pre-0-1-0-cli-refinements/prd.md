@@ -107,6 +107,13 @@ Four refinements requested before the v0.1.0 stable release:
   (2026-08-07), before any commit landed. Applies everywhere the round-1
   implementation used `show`: CLI grammar, envelope `operation` string,
   tests, both spec docs. `config validate` name unchanged.
+- D8: Add a wiki-authoring note to the operator guide: under
+  `--permission-mode dontAsk`, a Claude wiki skill's tool use during the
+  `/wiki-query` turn is governed by SKILL.md `allowed-tools` frontmatter —
+  wikis must declare `allowed-tools: Read, Grep, Glob` or skill-turn reads
+  are denied. Live-verified 2026-08-07 (evidence/live-verification-
+  2026-08-07.md finding 3); confirmed NOT a D6 regression (operator user
+  settings carry zero allow rules). Docs-only, round 3. (User, 2026-08-07.)
 
 ## Research findings (research/provider-cli-flags.md, verified on claude 2.1.223 / codex-cli 0.146.0)
 
@@ -185,3 +192,4 @@ cargo test --all-targets --all-features -- --test-threads=1
 - `tests/codex_adapter.rs`
 - `docs/2026-07-28-llm-wikis-external-query-design.md`
 - `docs/llm-wikis.md`
+- `config.example.toml`
