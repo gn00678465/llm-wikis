@@ -25,7 +25,11 @@ task status manually — statuses and next steps are all defined there.
   that start with `-` need a `--` separator or ripgrep parses them as
   flags; prose-only checklist rows get mis-executed by gates.ts's literal
   command extractor — keep every gate row either a runnable command or
-  clearly non-command prose outside the command column.
+  clearly non-command prose outside the command column. Same family: in
+  prd.md AC evidence text, never write backticked glob-like paths (e.g.
+  a `tests/*.rs` shorthand) — gates.ts's evidence-path checker reads them
+  as literal file references and false-blocks; spell paths out or use
+  plain prose.
 - In the Bash tool environment on this machine, `cargo` can resolve to a
   broken chocolatey shim; if cargo commands fail oddly, check `which cargo`
   / correct PATH (or use PowerShell) before debugging the build itself.

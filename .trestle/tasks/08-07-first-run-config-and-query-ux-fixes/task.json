@@ -6,7 +6,7 @@
   "created": "2026-08-07T05:20:21.494Z",
   "developer": "Madao",
   "rounds": {
-    "evaluate": 1,
+    "evaluate": 2,
     "rollback": 0,
     "baseline": [
       ".trestle/tasks/08-07-first-run-config-and-query-ux-fixes/check.jsonl",
@@ -14,7 +14,7 @@
       ".trestle/tasks/08-07-first-run-config-and-query-ux-fixes/prd.md",
       ".trestle/tasks/08-07-first-run-config-and-query-ux-fixes/task.json"
     ],
-    "implemented": 1
+    "implemented": 2
   },
   "deferrals": []
 }

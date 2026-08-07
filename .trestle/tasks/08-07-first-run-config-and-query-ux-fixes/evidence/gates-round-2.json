@@ -1,0 +1,81 @@
+{
+  "taskName": "08-07-first-run-config-and-query-ux-fixes",
+  "round": 2,
+  "verdict": "block",
+  "gates": [
+    {
+      "id": "AC1",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC1: `config init` template and config.example.toml show single-quoted example paths plus a Windows-quoting comment; existing tests that pin template content updated. (evidence: src/config.rs:1057-1078 INIT_TEMPLATE; config.example.toml:17-22,43-44,65-66; tests/config_init.rs generated_file_example_paths_are_single_quoted_with_a_windows_quoting_note; tests/config_contract.rs config_example_toml_uses_single_quoted_paths_with_a_windows_quoting_note — `cargo test --test config_init --test config_contract -- --test-threads=1` passed)"
+    },
+    {
+      "id": "AC2",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC2: A config whose TOML parse error is backslash-escape-related yields CONFIG_INVALID whose message includes the three legal spellings hint; other TOML errors keep their current message shape. (evidence: src/config.rs toml_parse_error_message; tests/config_contract.rs backslash_escape_toml_error_carries_the_windows_path_hint and non_escape_toml_errors_do_not_carry_the_windows_path_hint — `cargo test `llm-wikis config validate` against a config with `project_root = \"E:\\not_company\\wiki\"` prints \"... -- Windows paths in double-quoted TOML strings must escape `\\`: use a single-quoted literal string ('C:\\path'), double the backslashes in a double-quoted string (\\\"C:\\\\path\\\"), or use forward slashes (\\\"C:/path\\\")\")"
+    },
+    {
+      "id": "AC3",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC3: `llm-wikis query \"question\"` (no `--`) and `query -- \"q\"` (no `--wiki`) both emit ARGUMENT_INVALID messages that include the correct invocation shape `query --wiki <id> -- \"<question>\"`; `--json` still emits exactly one JSON document. (evidence: src/cli.rs handle_parse_error, usage_line_mentions_query, QUERY_USAGE_HINT, run_query_command; tests/cli_contract.rs query_without_separator_names_the_correct_invocation_shape, query_missing_wiki_message_names_the_correct_invocation_shape, query_without_separator_still_emits_exactly_one_json_document — `cargo test --test cli_contract -- --test-threads=1` passed)"
+    },
+    {
+      "id": "AC4",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC4: The ENTRYPOINT_UNVERIFIED message names the remedial command (`doctor ... --live`); tests pinning that message updated; the gate's behavior itself unchanged. (evidence: src/query.rs:356-364 entrypoint_unverified; tests/query_service.rs probe_gate_enforced_mode_absent_record and probe_gate_enforced_mode_mismatched_record — `cargo test --test query_service -- --test-threads=1` passed)"
+    },
+    {
+      "id": "AC5",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC5: `--help` output for the root command and every subcommand (list, doctor, query, config init/list/validate) contains only short user-facing descriptions — no PRD/AC/D-number/task-id/spec-section markers; a test pins this. `--json` remains listed globally (D7). (evidence: src/cli.rs Cli/CliCommand/ConfigAction/AgentArg doc comments; tests/cli_contract.rs help_output_never_leaks_internal_planning_markers — `cargo test --test cli_contract -- --test-threads=1` passed)"
+    },
+    {
+      "id": "AC6",
+      "category": "ac",
+      "ok": false,
+      "detail": "checked but evidence references path(s) that do not exist: tests/*.rs: AC6: `cargo fmt --all --check`, `cargo clippy --all-targets AGENTS.md Working rules). (evidence: `cargo fmt --all --check` exit 0; `cargo clippy --all-targets --all-features -- -D warnings` exit 0; `cargo test --lib --bins --all-features` plus every `tests/*.rs` binary except process_supervisor.rs run individually with `--test-threads=1`, all passed)"
+    },
+    {
+      "id": "verify-1",
+      "category": "verification",
+      "ok": false,
+      "detail": "exit 4294967295: cargo fmt --all --check"
+    },
+    {
+      "id": "verify-2",
+      "category": "verification",
+      "ok": false,
+      "detail": "exit 4294967295: cargo clippy --all-targets --all-features -- -D warnings"
+    },
+    {
+      "id": "verify-3",
+      "category": "verification",
+      "ok": false,
+      "detail": "exit 4294967295: cargo test --all-targets --all-features -- --test-threads=1"
+    },
+    {
+      "id": "scope-src/cli.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: src/cli.rs"
+    },
+    {
+      "id": "scope-tests/cli_contract.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: tests/cli_contract.rs"
+    },
+    {
+      "id": "trace-audit",
+      "category": "audit",
+      "ok": false,
+      "detail": "trace.ts audit found 2 violation(s) — archive-verdict-not-gated: task-archive at 2026-08-07T05:19:41.639Z (task \"08-06-pre-0-1-0-cli-refinements\") has no matching pass gates-run event and no archive-verdict-waived event | plan-drifted-without-rollback: round-start 2 (task \"08-06-pre-0-1-0-cli-refinements\", 2026-08-06T22:34:46.480Z) has a different design.md/implement.md hash than the previous round-start (round 1) with no round-rollback between them"
+    }
+  ],
+  "manual": [],
+  "rerun": false
+}

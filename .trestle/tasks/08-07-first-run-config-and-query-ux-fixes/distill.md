@@ -6,6 +6,8 @@
 |---|---|---|
 | `AGENTS.md` (Working rules) | Added: `///` on clap-derived items becomes user-facing `--help` text — rationale goes in `//`; the marker-leak test pins it | Root cause of user repro 4 (planning prose leaked into `config --help`); any agent writing cli.rs needs this at startup |
 
+| `AGENTS.md` (Working rules) | Extended the checklist-authoring rule: prd.md AC evidence text must not contain backticked glob-like paths — gates.ts's evidence checker reads them literally and false-blocks | Round-2 evaluation false-blocked on exactly this (AC6 evidence said "every `tests/*.rs` binary"); second occurrence of the gates.ts-phrasing family |
+
 ## Nothing to record
 
 - ARCHITECTURE.md: reviewed: prd.md D1-D7 and the five implemented fixes.

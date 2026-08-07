@@ -71,6 +71,15 @@ goal; the user will keep verifying until 0.1.0 criteria are met.
 - D7: `--json` stays a global flag, unchanged — it is functional on every
   subcommand and the help listing reflects real behavior; only the
   help-text leak (D6) is fixed. (User, interview 2026-08-07.)
+- D8: Multi-agent doctor attempts get guidance (round 2; user repro 5,
+  2026-08-07): `--agent claude,codex` (invalid value) and repeated
+  `--agent` (cannot be used multiple times) both emit raw clap text. Fix:
+  the doctor-scoped clap parse errors of those two shapes gain a hint that
+  `doctor --live` accepts one (wiki, agent) pair per run — run it once per
+  agent. Same mechanism as the D4 query hint (usage-line detection); the
+  one-pair-per-run semantics themselves stay exactly as specified (live
+  probes consume quota). AC: both messages carry the hint; a test pins
+  each; no semantics change.
 - D6: Help-text hygiene — every clap-visible doc comment becomes a short,
   user-facing one-liner (imperative, no PRD/AC/D-number/task/spec-section
   references); the rationale prose moves to regular `//` comments so the
@@ -128,9 +137,9 @@ goal; the user will keep verifying until 0.1.0 criteria are met.
   --all-features -- --test-threads=1` pass (process_supervisor caveat per
   AGENTS.md Working rules). (evidence: `cargo fmt --all --check` exit 0;
   `cargo clippy --all-targets --all-features -- -D warnings` exit 0; `cargo
-  test --lib --bins --all-features` plus every `tests/*.rs` binary except
-  process_supervisor.rs run individually with `--test-threads=1`, all
-  passed)
+  test --lib --bins --all-features` plus every integration-test binary
+  except process_supervisor.rs run individually with `--test-threads=1`,
+  all passed)
 
 ## Verification Plan
 
