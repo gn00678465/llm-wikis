@@ -183,19 +183,37 @@ testing feature**, not a caller-facing one:
 Use `--config` for local testing, CI, or deliberately running against a
 second, non-default registry — not as a request-time parameter.
 
-### 2.3 `config init` never overwrites
+### 2.3 `config init`: wizard on a terminal, template otherwise, never merges
 
 ```powershell
 llm-wikis config init
+llm-wikis config init --yes
+llm-wikis config init --force
 llm-wikis --config C:\path\to\alt-config.toml config init
 ```
 
-Creates the parent directory (if needed) and a valid, non-interactive
-starter config — runtime/provider defaults, an **empty** wiki registry, and
-one commented example wiki block — **only when the destination does not
-already exist**. An existing destination fails closed with `CONFIG_EXISTS`
-(exit `2`); it is never merged or overwritten. There is no wizard and no
-`config add-wiki` command in 0.1.0 — add wikis by hand-editing the TOML.
+Creates the parent directory (if needed) and a valid starter config —
+runtime/provider defaults, an **empty** wiki registry, and one commented
+example wiki block.
+
+- **Piped/scripted, `--json`, or `--yes`** (including every non-interactive
+  invocation — an agent driving this CLI, CI, a script): writes the fixed
+  template directly, no prompts.
+- **A real terminal (both stdin and stdout are a TTY), without `--json` and
+  without `--yes`**: runs a short interactive wizard — `default_agent`
+  (a Select) and each provider's `executable` (a Text prompt, Enter accepts
+  the shown default) — then writes the customized template. `--yes` skips
+  this even on a TTY.
+- If the destination **already exists**: `--force` always overwrites
+  without asking; without `--force`, a non-interactive invocation fails
+  closed with `CONFIG_EXISTS` (exit `2`), and a TTY invocation instead asks
+  to confirm the overwrite (default: do not overwrite — declining leaves
+  `CONFIG_EXISTS` and the file untouched).
+- It is **never merged** — an overwrite (confirmed, or via `--force`)
+  replaces the whole file.
+
+There is no `config add-wiki` command in 0.1.0 — add wikis by hand-editing
+the TOML (§2.4).
 
 ### 2.3a `config list` and `config validate`
 
@@ -429,12 +447,12 @@ explicit, quota-consuming confirmation that the contract still holds.
 
 ```text
 llm-wikis --version
-llm-wikis [--config <absolute-path>] [--json] config init
+llm-wikis [--config <absolute-path>] [--json] config init [--yes] [--force]
 llm-wikis [--config <absolute-path>] [--json] config list
 llm-wikis [--config <absolute-path>] [--json] config validate
 llm-wikis [--config <absolute-path>] [--json] list
 llm-wikis [--config <absolute-path>] [--json] doctor [--wiki <id>] [--agent claude|codex] [--live]
-llm-wikis [--config <absolute-path>] [--json] query --wiki <id> [--agent claude|codex] -- <question>
+llm-wikis [--config <absolute-path>] [--json] query --wiki <id> [--agent claude|codex] [--plain] -- <question>
 ```
 
 `--version` prints `llm-wikis 0.1.0-beta.2`. `list` loads the registry and lists
@@ -473,13 +491,21 @@ stderr while the provider call is in flight, cleared before the answer (or
 error line) prints — this never appears in a piped, redirected, or CI
 invocation, and never emits anything to stdout at any point.
 
+When stdout is an interactive terminal, human-mode `query` renders the
+answer's markdown with terminal styling (headings, bold, lists, ...).
+`--plain` forces raw markdown output instead; a piped/redirected stdout or
+`NO_COLOR` (any value, per no-color.org — presence, not content, disables
+color) force it automatically, so an agent invoking this CLI through a pipe
+already gets raw markdown without needing `--plain` at all.
+
 ### 3.3 JSON envelopes and exit classes
 
 `--json` emits **exactly one** JSON document on stdout per invocation
 (`schema_version: "1.0"`), success or failure alike; human mode prints the
 answer, then gaps, then warnings, to stdout on success, with every
 diagnostic — including the human-mode error line itself, for every
-subcommand — on stderr instead. A failing human-mode invocation therefore
+subcommand — on stderr instead. `query`'s human-mode answer is
+terminal-rendered markdown on a TTY, or raw markdown otherwise (§3.2). A failing human-mode invocation therefore
 prints nothing at all to stdout; the error line (`error: CODE (message)`)
 lands on stderr exclusively. Every failure uses the same public
 `error: {code, message, details?}` object. The process exit code always

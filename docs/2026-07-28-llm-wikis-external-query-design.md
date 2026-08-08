@@ -69,7 +69,7 @@ Provider behavior also differs:
 - structured JSON success and failure envelopes;
 - citation extraction, validation, and wiki namespacing;
 - static and optional live `llm-wikis doctor` checks;
-- a non-interactive, non-overwriting `llm-wikis config init`;
+- an `llm-wikis config init` that writes non-interactively (piped/scripted, `--json`, or `--yes`) or through a short interactive wizard for `default_agent` and the two provider executables (a real terminal, no `--yes`), and never merges into an existing file — an existing destination without `--force` is `CONFIG_EXISTS`; `--force` overwrites it;
 - one native Rust executable with no Python runtime dependency;
 - GitHub Release binaries and checksum-verifying install scripts;
 - Windows x64, Linux/WSL x64, and macOS Apple Silicon portability;
@@ -94,7 +94,7 @@ Provider behavior also differs:
 - Intel macOS and Linux ARM binaries;
 - package-manager distribution through Cargo, Homebrew, WinGet, Scoop, apt, or similar channels;
 - Codex installed-plugin loading, because it conflicts with the version 0.1.0 `--ignore-user-config` hardening posture until an explicit safe plugin-load mechanism is verified;
-- an interactive configuration wizard;
+- an interactive wizard for registering wikis (`config add-wiki`) — `config init`'s own short wizard covers only `default_agent` and provider executables, never wiki registration;
 - a built-in self-update command;
 - Apple Developer ID signing, Apple notarization, or Windows Authenticode signing in version 0.1.0.
 
@@ -126,17 +126,17 @@ A future `llm-wikis orchestration` command may call the same Query Service once 
 
 ```text
 llm-wikis --version
-llm-wikis [--config <absolute-path>] [--json] config init
+llm-wikis [--config <absolute-path>] [--json] config init [--yes] [--force]
 llm-wikis [--config <absolute-path>] [--json] config list
 llm-wikis [--config <absolute-path>] [--json] config validate
 llm-wikis [--config <absolute-path>] [--json] list
 llm-wikis [--config <absolute-path>] [--json] doctor [--wiki <id>] [--agent claude|codex] [--live]
-llm-wikis [--config <absolute-path>] [--json] query --wiki <id> [--agent claude|codex] -- <question>
+llm-wikis [--config <absolute-path>] [--json] query --wiki <id> [--agent claude|codex] [--plain] -- <question>
 ```
 
 `llm-wikis --version` prints `llm-wikis 0.1.0`.
 
-`llm-wikis config init` creates the parent directory and a valid, non-interactive starter configuration only when the destination does not exist. It never overwrites or merges an existing file; an existing destination is `CONFIG_EXISTS` and exit `2`. The generated file contains runtime and provider defaults, an empty wiki registry, and a commented wiki example. A future wizard or `config add-wiki` command is outside version 0.1.0.
+`llm-wikis config init` creates the parent directory and a valid starter configuration. On a real terminal (both stdin and stdout are a TTY), without `--json` and without `--yes`, it runs a short interactive wizard collecting `default_agent` and the two provider executables (Enter accepts the shown default) before writing the customized template; every other invocation shape — piped/scripted, `--json`, or `--yes` on a TTY — writes the fixed non-interactive template directly, unchanged from the wizard's own all-defaults output. It never merges an existing file: an existing destination without `--force` is `CONFIG_EXISTS` and exit `2` (a TTY invocation without `--force` asks to confirm the overwrite first, default no); `--force` always overwrites without asking. The generated file contains runtime and provider defaults, an empty wiki registry, and a commented wiki example. `config add-wiki` (registering a wiki interactively) remains outside version 0.1.0.
 
 In JSON mode, config initialization emits exactly `{ "schema_version": "1.0", "ok": true, "operation": "config_init", "path": "<absolute config path>", "created": true }` on success. Failure uses the same operation with `created: false` and the public `error` object.
 
@@ -148,7 +148,7 @@ If the positional question is omitted, the command reads the complete question f
 
 `--agent` is optional only when `default_agent` exists and the selected wiki enables it.
 
-Normal human output prints the answer followed by gaps and warnings. `--json` emits exactly one JSON document on stdout. Diagnostics — including every human-mode error line, for every subcommand — go to stderr; `--json` mode is unaffected, since its single JSON document (success or failure) always goes to stdout.
+Normal human output prints the answer followed by gaps and warnings. On a real terminal (stdout is a TTY), without `--plain` and without `NO_COLOR` set, the answer's markdown is rendered with terminal styling; a piped/redirected stdout, `--plain`, or `NO_COLOR` (any value) prints the raw markdown instead. `--json` emits exactly one JSON document on stdout. Diagnostics — including every human-mode error line, for every subcommand — go to stderr; `--json` mode is unaffected, since its single JSON document (success or failure) always goes to stdout.
 
 An interactive `query` invocation (stderr is a terminal) shows a spinner on stderr while the provider call is in flight, cleared before the answer or error line prints; a piped/redirected/non-interactive invocation shows nothing extra at all, on either stream.
 
