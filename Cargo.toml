@@ -1,6 +1,6 @@
 [package]
 name = "llm-wikis"
-version = "0.1.0-beta.2"
+version = "0.1.0-beta.3"
 edition = "2024"
 rust-version = "1.97"
 description = "Query pre-built knowledge-base wikis from Claude Code or Codex CLI, from anywhere."
