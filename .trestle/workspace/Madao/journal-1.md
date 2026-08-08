@@ -10,3 +10,9 @@ Commits: ddc7999 78638bf 1c8c9f8 b09198d 4026ea8
 
 Commits: 93bc301 6310d21 0c1ba4f d968a89
 
+## 2026-08-08T05:56:08.866Z — pre-0.1.0 CLI 強化：skills 目錄、markdown 終端渲染、init 防覆寫與互動設定
+
+query 人類模式新增 termimad TTY 渲染（--plain 逃生口，pipe/--json byte-for-byte 不變）；config init 新增 TTY 自動精靈與覆寫確認（--yes/--force，非 TTY 對 agent 安全不變）；新增 skills/llm-wikis-usage 跨工具 agent 技能目錄與 README 安裝說明；兩份規格文件同步修訂。三輪 evaluate：R1 Block（AC 證據缺、G12 表格解析、trace-audit 繼承、人工 gate 待驗）→R2 Block（AC 引用黏連 token 誤判）→R3 僅剩 G4 flaky，經使用者授權 waive 歸檔。八個 TTY 情境由使用者於真實終端逐一驗證。
+
+Commits: 7300381, ae335d9, ff04822, 62722b3
+
