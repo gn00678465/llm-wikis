@@ -1,0 +1,4 @@
+{"reason":"seed row — add real entries via: task.ts add-context <name> <implement|check> <file> <reason>"}
+{"file":"tests/spec_drift.rs","reason":"機械化核對規格文件與 src/error.rs、src/output.rs 的 error/check/warning 三張表——規格修訂後必須仍綠"}
+{"file":"tests/cli_contract.rs","reason":"help_output_never_leaks_internal_planning_markers 抓 --help 洩漏；新 flags 的 /// 措辭受此測試約束"}
+{"file":"tests/config_init.rs","reason":"init()/init_envelope() 簽章被此測試直接依賴，design.md 明訂不得改動簽章"}

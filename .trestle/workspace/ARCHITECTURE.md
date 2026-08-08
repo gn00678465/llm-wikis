@@ -96,6 +96,23 @@ answer with citations via the output contract.
   stdout only; human-readable error lines and the query spinner on stderr;
   `--json` always exactly one JSON document on stdout even on failure.
   (Same task, D2/D3; docs/llm-wikis.md §3.)
+- Terminal presentation stays in the CLI routing layer: markdown→ANSI
+  rendering (`termimad`) and interactive prompts (`dialoguer`) live in
+  `cli.rs` (`emit_query` / `run_config_init`), gated on
+  `std::io::IsTerminal` so non-TTY runs never even construct the
+  interactive objects (extends the `start_query_spinner` precedent);
+  `output.rs::render_human` stays a pure formatter — its doc comment
+  assigns stream-routing to cli.rs. Dependency choices: `dialoguer` over
+  `inquire` to reuse the console-rs family already in-tree via
+  `indicatif`; `termimad` accepted knowing it adds `crossterm` as a
+  second terminal backend. (Task 08-08, D3/D4, research/markdown-rendering.md,
+  research/init-interactive.md.)
+- `skills/llm-wikis-usage/` ships an agent-facing usage skill in-repo,
+  frontmatter restricted to `name`+`description` — the cross-tool subset
+  Claude Code and Codex both accept; a Claude plugin/marketplace layout
+  was rejected because Codex has no plugin concept and llm-wikis is a
+  dual-provider tool. Install path is manual copy (README section), not
+  the installers. (Task 08-08, D5, research/skills-directory.md.)
 - 2026-08-06: agent-workflow conventions migrated from the
   `/setup-matt-pocock-skills` scheme (`docs/agents/` + `.scratch/` tracker +
   CONTEXT.md/ADR plan) to trestle — `.trestle/tasks/` owns issue/spec

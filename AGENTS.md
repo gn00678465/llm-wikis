@@ -29,7 +29,18 @@ task status manually — statuses and next steps are all defined there.
   prd.md AC evidence text, never write backticked glob-like paths (e.g.
   a `tests/*.rs` shorthand) — gates.ts's evidence-path checker reads them
   as literal file references and false-blocks; spell paths out or use
-  plain prose.
+  plain prose. Two more confirmed instances (task 08-08): a literal `|`
+  inside a backticked gate command splits the markdown table row and
+  gates.ts drops the gate — write rg alternation as `\x7c` (hex escape,
+  rg-verified); and AC evidence must not glue a test name onto its file
+  path (`tests/foo.rs::test_name`) — the path checker chokes on the fused
+  token; keep the path ending at `.rs` and name the test separately.
+- Trestle trace-audit's `suspicious-trace-start` (trace.jsonl's first
+  event is neither a preamble session-start nor `trace-rotated`, e.g.
+  after a prior task's archive-time waive) false-blocks every later
+  round; the sanctioned fix is `trace.ts rotate --reason "<why>"` — it
+  starts a fresh trace with a `trace-rotated` head and preserves the old
+  file under the active task's `evidence/`. (Task 08-08, round 1.)
 - In the Bash tool environment on this machine, `cargo` can resolve to a
   broken chocolatey shim; if cargo commands fail oddly, check `which cargo`
   / correct PATH (or use PowerShell) before debugging the build itself.

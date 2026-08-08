@@ -11,7 +11,7 @@ read-only: a full-content snapshot check rejects any run that would have
 mutated a wiki page. (Source: README.md, Cargo.toml `description`,
 docs/llm-wikis.md.)
 
-Current version: 0.1.0-beta.1 (Source: Cargo.toml, git tag history).
+Current version: 0.1.0-beta.2 (Source: Cargo.toml; bump commit 682ddfc).
 
 ## Current phase goals
 
@@ -46,6 +46,13 @@ Only after both is v0.1.0 (first non-prerelease tag) published.
 - CI gates: `cargo fmt --check`, `cargo clippy -D warnings`,
   `cargo test --all-targets --all-features -- --test-threads=1`, plus
   installer verification scripts (Source: .github/workflows/ci.yml).
+- Agent-safety UX invariant: interactive/styled behavior is TTY-only and
+  opt-out-able — `query` renders markdown only when stdout is a terminal
+  (`--plain` / `NO_COLOR` force raw), `config init` runs its wizard only
+  on a real terminal (`--yes` skips, `--force` is the sole non-TTY
+  overwrite path); every piped/`--json` invocation stays byte-identical
+  to pre-wizard behavior so agents are never blocked on a prompt.
+  (Source: task 08-08 D3/D4, docs/llm-wikis.md §2.3/§3.2.)
 
 ## Open questions
 

@@ -1,0 +1,4 @@
+{"reason":"seed row — add real entries via: task.ts add-context <name> <implement|check> <file> <reason>"}
+{"file":"src/cli.rs","reason":"emit_query(~654) 渲染掛點、run_config_init(~376) 精靈/防覆寫掛點、ConfigAction(~97) 新 flags、IsTerminal 先例(698/820-838)；/// doc comment 即 --help 文字"}
+{"file":"src/config.rs","reason":"init(~1090) exclusive-create 現況、INIT_TEMPLATE(~1045)、Config 欄位(~373)、ConfigInitEnvelope(~1116) 形狀規格鎖定"}
+{"file":"docs/2026-07-28-llm-wikis-external-query-design.md","reason":"規格權威文件：line 72/139 no-wizard 表述需同步修訂、line 141 envelope 句不得動、27 error code 封閉集合(909)"}
