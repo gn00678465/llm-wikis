@@ -379,6 +379,110 @@ fn config_init_json_success_and_failure_shapes() {
     assert_eq!(v2["error"]["code"], "CONFIG_EXISTS");
 }
 
+// PRD 08-08-pre-0-1-0-cli-skills-markdown-init AC4: every non-TTY path in
+// design.md §2.2's matrix stays exercisable through `assert_cmd` (never a
+// controlling terminal, so `config init` always takes its non-interactive
+// branch here) -- `--force` overwrites without a prompt; `--force` absent
+// still returns `CONFIG_EXISTS` (regression); `--yes` is byte-identical to
+// the pre-task default write.
+#[test]
+fn config_init_force_overwrites_an_existing_file_without_a_prompt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("config.toml");
+    let target_str = target.display().to_string();
+
+    bin()
+        .args(["--config", &target_str, "config", "init"])
+        .assert()
+        .success();
+    fs::write(&target, "config_version = 1\n# tampered\n").unwrap();
+    let tampered = fs::read(&target).unwrap();
+
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            &target_str,
+            "config",
+            "init",
+            "--force",
+        ])
+        .assert()
+        .success()
+        .code(0);
+    let v = stdout_json(&assert);
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["created"], true);
+    let after = fs::read(&target).unwrap();
+    assert_ne!(after, tampered, "--force must overwrite the tampered file");
+}
+
+#[test]
+fn config_init_without_force_still_refuses_to_overwrite_an_existing_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("config.toml");
+    let target_str = target.display().to_string();
+
+    bin()
+        .args(["--config", &target_str, "config", "init"])
+        .assert()
+        .success();
+
+    let assert = bin()
+        .args(["--json", "--config", &target_str, "config", "init"])
+        .assert()
+        .failure()
+        .code(2);
+    let v = stdout_json(&assert);
+    assert_eq!(v["error"]["code"], "CONFIG_EXISTS");
+}
+
+#[test]
+fn config_init_yes_produces_byte_identical_output_to_the_default_template() {
+    let tmp = tempfile::tempdir().unwrap();
+    let without_yes = tmp.path().join("without-yes.toml");
+    let with_yes = tmp.path().join("with-yes.toml");
+
+    bin()
+        .args(["--config", without_yes.to_str().unwrap(), "config", "init"])
+        .assert()
+        .success();
+    bin()
+        .args([
+            "--config",
+            with_yes.to_str().unwrap(),
+            "config",
+            "init",
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read(&without_yes).unwrap(),
+        fs::read(&with_yes).unwrap(),
+        "--yes must write the same template as the flag-omitted non-TTY default"
+    );
+}
+
+#[test]
+fn config_init_generated_file_passes_config_validate_regardless_of_which_path_produced_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("config.toml");
+    let target_str = target.display().to_string();
+
+    bin()
+        .args(["--config", &target_str, "config", "init", "--yes"])
+        .assert()
+        .success();
+
+    bin()
+        .args(["--json", "--config", &target_str, "config", "validate"])
+        .assert()
+        .success()
+        .code(0);
+}
+
 // ---------------------------------------------------------------------------
 // `config list` / `config validate` (PRD 08-06-pre-0-1-0-cli-refinements
 // AC1; subcommand renamed from `show` to `list` per D7). `doctor` is
@@ -2034,8 +2138,37 @@ skill_path = ".claude/skills/wiki-query/SKILL.md"
             String::from_utf8_lossy(&human_assert.get_output().stderr)
         );
 
+        // PRD 08-08-pre-0-1-0-cli-skills-markdown-init AC2: `assert_cmd`
+        // never provides a controlling terminal, so `--plain` and its
+        // absence both hit the "not a TTY" branch of `emit_query`'s routing
+        // — this guards against a future refactor moving the `--plain`
+        // check to the wrong side of the TTY check, since today it cannot
+        // observe any actual behavior difference.
+        let mut plain_cmd = bin();
+        common_env(&mut plain_cmd);
+        let plain_assert = plain_cmd
+            .args([
+                "--config",
+                fixture.config_path.to_str().unwrap(),
+                "query",
+                "--wiki",
+                "demo",
+                "--agent",
+                "claude",
+                "--plain",
+                "--",
+                question,
+            ])
+            .assert()
+            .success();
+        assert_eq!(
+            plain_assert.get_output().stdout,
+            human_assert.get_output().stdout,
+            "--plain must be byte-identical to the flag-omitted case under a piped stdout"
+        );
+
         // Sanity: the wiki fixture's content root was never mutated by any
-        // of the three real subprocess invocations above.
+        // of the real subprocess invocations above.
         let home_contents = fs::read(fixture.wiki_root.join("home.md")).unwrap();
         assert_eq!(home_contents, b"# Home\nFixture content.\n");
     }

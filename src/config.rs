@@ -1077,6 +1077,63 @@ max_stderr_bytes   = 65536
 # skill_path = ".claude/skills/wiki-query/SKILL.md"
 "#;
 
+/// Renders the `config init` starter document with the wizard's three
+/// answers substituted in (PRD 08-08-pre-0-1-0-cli-skills-markdown-init D4,
+/// design.md §2.3). `render_init_template(Some(Agent::Claude), "claude",
+/// "codex")` must equal [`INIT_TEMPLATE`] byte-for-byte — pinned by
+/// `tests/config_contract.rs`. Wiki registration deliberately stays out of
+/// this function's parameters (F9): the commented example wiki block below
+/// is always emitted unchanged.
+pub fn render_init_template(
+    default_agent: Option<Agent>,
+    claude_executable: &str,
+    codex_executable: &str,
+) -> String {
+    let default_agent_line = match default_agent {
+        Some(Agent::Claude) => "default_agent = \"claude\"\n".to_string(),
+        Some(Agent::Codex) => "default_agent = \"codex\"\n".to_string(),
+        None => String::new(),
+    };
+    format!(
+        r#"config_version = 1
+{default_agent_line}
+[providers.claude]
+executable = "{claude_executable}"
+
+[providers.codex]
+executable = "{codex_executable}"
+
+[runtime]
+timeout_seconds    = 180
+max_question_bytes = 65536
+max_stdout_bytes   = 1048576
+max_stderr_bytes   = 65536
+
+# Example wiki (edit the paths and prompt, then uncomment to register it):
+#
+# Windows paths: `\` is an escape character inside TOML's double-quoted
+# strings, so a path like C:\Wikis\example must be spelled one of three
+# ways: a single-quoted literal string ('C:\Wikis\example', no escaping at
+# all), a double-quoted string with doubled backslashes
+# ("C:\\Wikis\\example"), or forward slashes ("C:/Wikis/example", which
+# Windows also accepts). This template uses single-quoted literal strings
+# below.
+#
+# [wikis.example]
+# title        = "Example Knowledge Base"
+# project_root = '/absolute/path/to/example'
+# content_root = '/absolute/path/to/example'
+# agents       = ["claude"]
+# query_prompt = "Use the wiki-query skill to answer from this wiki."
+#
+# [wikis.example.claude]
+# load       = "project_skill"
+# entrypoint = "/wiki-query"
+# skill_path = ".claude/skills/wiki-query/SKILL.md"
+"#
+    )
+}
+
 /// Result of a `config init` attempt (path always known; `created` only true on
 /// an actual exclusive-create write).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1088,13 +1145,36 @@ pub struct ConfigInitOutcome {
 /// Exclusive-create only: never overwrites, never merges, never reads the
 /// caller's current working directory for discovery.
 pub fn init(path: &Path) -> Result<ConfigInitOutcome, AppError> {
+    init_with_content(path, INIT_TEMPLATE, false)
+}
+
+/// The shared write path behind [`init`] and the CLI's wizard/`--force`
+/// flows (design.md §2.3). `force: false` keeps today's exclusive-create
+/// semantics (`init`'s own contract, unchanged); `force: true` truncates
+/// and overwrites an existing file instead of failing with
+/// `CONFIG_EXISTS` -- the only overwrite path in this codebase (PRD
+/// 08-08-pre-0-1-0-cli-skills-markdown-init D4: `--force` is the sole
+/// consent to overwrite; a TTY-confirmed overwrite calls this the same way
+/// after the caller's own `Confirm` returns `true`).
+pub fn init_with_content(
+    path: &Path,
+    content: &str,
+    force: bool,
+) -> Result<ConfigInitOutcome, AppError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| config_invalid(format!("cannot create configuration directory: {e}")))?;
     }
-    match OpenOptions::new().write(true).create_new(true).open(path) {
+    let mut open_options = OpenOptions::new();
+    open_options.write(true);
+    if force {
+        open_options.truncate(true).create(true);
+    } else {
+        open_options.create_new(true);
+    }
+    match open_options.open(path) {
         Ok(mut file) => {
-            file.write_all(INIT_TEMPLATE.as_bytes())
+            file.write_all(content.as_bytes())
                 .map_err(|e| config_invalid(format!("cannot write configuration file: {e}")))?;
             Ok(ConfigInitOutcome {
                 path: path.to_path_buf(),

@@ -6,11 +6,11 @@ use std::fs;
 use std::path::Path;
 
 use llm_wikis::config::{
-    Config, LoadMode, MapEnv, Platform, ProviderWikiConfig, WikiConfig,
+    Config, INIT_TEMPLATE, LoadMode, MapEnv, Platform, ProviderWikiConfig, WikiConfig,
     check_claude_wiki_settings_surface, config_list_envelope, config_list_error_envelope,
     config_validate_envelope, config_validate_error_envelope, default_cache_path,
-    default_config_path, resolve_and_check_artifact, resolve_wiki_roots, validate_config_override,
-    validate_entrypoint, validate_executable, validate_query_prompt,
+    default_config_path, render_init_template, resolve_and_check_artifact, resolve_wiki_roots,
+    validate_config_override, validate_entrypoint, validate_executable, validate_query_prompt,
 };
 use llm_wikis::error::{AppError, ErrorCode};
 use llm_wikis::output::Agent;
@@ -1407,4 +1407,37 @@ fn config_validate_error_envelope_used_only_when_the_path_itself_cannot_resolve(
         envelope.error.as_ref().unwrap().code,
         ErrorCode::ArgumentInvalid
     );
+}
+
+// ---------------------------------------------------------------------------
+// `render_init_template` (PRD 08-08-pre-0-1-0-cli-skills-markdown-init D4,
+// design.md §2.3): the wizard's default-argument output must stay
+// byte-identical to the pre-existing INIT_TEMPLATE constant, so the
+// non-interactive/`--yes` code paths that keep calling `init()`/`INIT_TEMPLATE`
+// directly never silently drift from what the wizard would produce with
+// every prompt left at its default.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn render_init_template_default_arguments_match_init_template_byte_for_byte() {
+    let rendered = render_init_template(Some(Agent::Claude), "claude", "codex");
+    assert_eq!(rendered, INIT_TEMPLATE);
+}
+
+#[test]
+fn render_init_template_substitutes_default_agent_and_executables() {
+    let rendered = render_init_template(Some(Agent::Codex), "my-claude", "my-codex");
+    assert!(rendered.contains("default_agent = \"codex\""));
+    assert!(rendered.contains("executable = \"my-claude\""));
+    assert!(rendered.contains("executable = \"my-codex\""));
+    assert!(!rendered.contains("default_agent = \"claude\""));
+}
+
+#[test]
+fn render_init_template_omits_default_agent_line_when_none() {
+    let rendered = render_init_template(None, "claude", "codex");
+    assert!(!rendered.contains("default_agent"));
+    // Still a valid, loadable document (default_agent is an optional field).
+    let cfg = Config::load_str(&rendered).expect("must remain a valid zero-wiki registry");
+    assert!(cfg.default_agent.is_none());
 }

@@ -24,17 +24,19 @@ use clap::error::ErrorKind;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::config::{
-    Config, ConfigInitEnvelope, ConfigListEnvelope, ConfigValidateEnvelope, Platform, ProcessEnv,
-    config_list_envelope, config_list_error_envelope, config_validate_envelope,
-    config_validate_error_envelope, default_cache_path, default_config_path, init_envelope,
-    validate_config_override,
+    Config, ConfigInitEnvelope, ConfigInitOutcome, ConfigListEnvelope, ConfigValidateEnvelope,
+    INIT_TEMPLATE, Platform, ProcessEnv, config_list_envelope, config_list_error_envelope,
+    config_validate_envelope, config_validate_error_envelope, default_cache_path,
+    default_config_path, init, init_with_content, render_init_template, validate_config_override,
 };
 use crate::doctor::{
     CheckStatus, DoctorEnvelope, DoctorRequest, ListEnvelope, doctor_error_envelope,
     list_error_envelope, run_doctor, run_list,
 };
 use crate::error::{AppError, ErrorCode, dominant_exit};
-use crate::output::{Agent, QueryEnvelope, SCHEMA_VERSION, render_human, render_json};
+use crate::output::{
+    Agent, QueryEnvelope, SCHEMA_VERSION, render_human, render_json, render_markdown_ansi,
+};
 use crate::probes::{FileProbeStore, QueryMode};
 use crate::providers::RealProcessRunner;
 use crate::query::{QueryRequest, QueryService};
@@ -84,6 +86,12 @@ enum CliCommand {
         wiki: Vec<String>,
         #[arg(long)]
         agent: Option<AgentArg>,
+        /// Print the raw markdown answer instead of terminal-rendered styling.
+        // PRD 08-08-pre-0-1-0-cli-skills-markdown-init D3: forces the raw
+        // path even on a TTY; independent of `NO_COLOR`/piped-output
+        // detection, which already force raw on their own (design.md §1.2).
+        #[arg(long)]
+        plain: bool,
         /// The question text, supplied after a literal `--` separator.
         // `last = true` is what makes clap require that separator at all —
         // without it this would just be an ordinary (and, without `--`,
@@ -95,7 +103,21 @@ enum CliCommand {
 
 #[derive(Subcommand)]
 enum ConfigAction {
-    Init,
+    Init {
+        /// Skip the interactive setup wizard and write the default template.
+        // PRD 08-08-pre-0-1-0-cli-skills-markdown-init D4: also the implicit
+        // behavior on a non-TTY/--json invocation, so this flag matters only
+        // to a TTY caller that wants npm-init--y-style non-interactive
+        // output. Never a blanket overwrite consent -- see `--force`.
+        #[arg(long)]
+        yes: bool,
+        /// Overwrite an existing configuration file without prompting.
+        // The only overwrite consent path (D4): a TTY caller without this
+        // flag gets a Confirm prompt (default No); a non-TTY caller without
+        // it keeps today's CONFIG_EXISTS behavior.
+        #[arg(long)]
+        force: bool,
+    },
     /// Print the resolved configuration.
     // "Resolved" means after serde's own field-level defaulting
     // (`Config::load`'s output as-is) — never additionally
@@ -186,7 +208,10 @@ fn handle_parse_error(e: &clap::Error, args: &[OsString]) -> i32 {
                 _ => {}
             }
             let err = AppError::new(ErrorCode::ArgumentInvalid, message);
-            emit_query(json_mode, query_failure_envelope(None, None, err))
+            // `plain: false` is always safe here: this is a failure envelope
+            // (`err` above), and `emit_query`'s rendering routing is only
+            // ever consulted on the success branch.
+            emit_query(json_mode, false, query_failure_envelope(None, None, err))
         }
     }
 }
@@ -283,7 +308,7 @@ fn dispatch(cli: Cli) -> i32 {
     let config_override = cli.config.as_deref();
     match cli.command {
         CliCommand::Config { action } => match action {
-            ConfigAction::Init => run_config_init(json, config_override),
+            ConfigAction::Init { yes, force } => run_config_init(json, config_override, yes, force),
             ConfigAction::List => run_config_list(json, config_override),
             ConfigAction::Validate => run_config_validate(json, config_override),
         },
@@ -294,12 +319,14 @@ fn dispatch(cli: Cli) -> i32 {
         CliCommand::Query {
             wiki,
             agent,
+            plain,
             question,
         } => run_query_command(
             json,
             config_override,
             wiki,
             agent.map(Agent::from),
+            plain,
             question,
         ),
     }
@@ -373,34 +400,175 @@ fn error_code_from_str(code: &str) -> Option<ErrorCode> {
 // `config init` (spec §5.1)
 // ---------------------------------------------------------------------------
 
-fn run_config_init(json: bool, override_path: Option<&Path>) -> i32 {
-    let envelope = match override_path {
+/// Resolves the path `config init` should target, or an already-built
+/// failure envelope when that resolution itself fails (a relative
+/// `--config` override, or an unresolvable platform default) -- preserves
+/// the pre-existing behavior of echoing the raw override value back in
+/// `path` on an override validation failure, versus an empty `path` when no
+/// platform default could be derived at all. Boxed per
+/// `clippy::result_large_err` -- `ConfigInitEnvelope` is a full public
+/// envelope, well past the lint's small-`Err`-variant threshold.
+fn resolve_init_path(override_path: Option<&Path>) -> Result<PathBuf, Box<ConfigInitEnvelope>> {
+    match override_path {
         Some(p) => match validate_config_override(p) {
-            Ok(()) => init_envelope(p),
-            Err(err) => ConfigInitEnvelope {
+            Ok(()) => Ok(p.to_path_buf()),
+            Err(err) => Err(Box::new(ConfigInitEnvelope {
                 schema_version: SCHEMA_VERSION,
                 ok: false,
                 operation: "config_init",
                 path: p.display().to_string(),
                 created: false,
                 error: Some(err),
-            },
+            })),
         },
         None => match default_config_path(Platform::host(), &ProcessEnv) {
-            Some(p) => init_envelope(&p),
-            None => ConfigInitEnvelope {
+            Some(p) => Ok(p),
+            None => Err(Box::new(ConfigInitEnvelope {
                 schema_version: SCHEMA_VERSION,
                 ok: false,
                 operation: "config_init",
                 path: String::new(),
-                created: false,
                 error: Some(AppError::new(
                     ErrorCode::ConfigInvalid,
                     "cannot determine the platform configuration path: a required environment variable is unset",
                 )),
-            },
+                created: false,
+            })),
         },
+    }
+}
+
+fn outcome_to_init_envelope(
+    path: &Path,
+    result: Result<ConfigInitOutcome, AppError>,
+) -> ConfigInitEnvelope {
+    match result {
+        Ok(outcome) => ConfigInitEnvelope {
+            schema_version: SCHEMA_VERSION,
+            ok: true,
+            operation: "config_init",
+            path: outcome.path.display().to_string(),
+            created: outcome.created,
+            error: None,
+        },
+        Err(err) => ConfigInitEnvelope {
+            schema_version: SCHEMA_VERSION,
+            ok: false,
+            operation: "config_init",
+            path: path.display().to_string(),
+            created: false,
+            error: Some(err),
+        },
+    }
+}
+
+/// Writes the fixed, non-interactive starter template (`--yes`, non-TTY, or
+/// `--json`, PRD 08-08-pre-0-1-0-cli-skills-markdown-init D4). `force`
+/// keeps its "only overwrite consent" role here too: absent, this is
+/// exactly `init(path)`'s pre-existing exclusive-create behavior.
+fn write_template_init(path: &Path, force: bool) -> ConfigInitEnvelope {
+    let result = if force {
+        init_with_content(path, INIT_TEMPLATE, true)
+    } else {
+        init(path)
     };
+    outcome_to_init_envelope(path, result)
+}
+
+/// The TTY-only interactive path (D4): an existing file without `--force`
+/// is confirmed first (declining leaves `CONFIG_EXISTS` and no write);
+/// otherwise the wizard collects `default_agent` and the two provider
+/// executables, and the customized template is written -- force-written
+/// whenever the file already existed (either `--force` or a just-accepted
+/// confirm), exclusive-create otherwise. Neither `dialoguer` prompt type is
+/// constructed on any other code path (`run_config_init`'s own branch
+/// above never reaches this function at all when non-interactive).
+fn run_config_init_interactive(path: &Path, force: bool) -> ConfigInitEnvelope {
+    let file_exists = path.exists();
+    if file_exists && !force {
+        let confirmed = dialoguer::Confirm::new()
+            .with_prompt(format!(
+                "configuration already exists at {}. Overwrite?",
+                path.display()
+            ))
+            .default(false)
+            .interact_opt()
+            .unwrap_or(Some(false))
+            .unwrap_or(false);
+        if !confirmed {
+            return ConfigInitEnvelope {
+                schema_version: SCHEMA_VERSION,
+                ok: false,
+                operation: "config_init",
+                path: path.display().to_string(),
+                created: false,
+                error: Some(AppError::new(
+                    ErrorCode::ConfigExists,
+                    "configuration file already exists",
+                )),
+            };
+        }
+    }
+
+    let (default_agent, claude_executable, codex_executable) = run_config_init_wizard();
+    let content = render_init_template(default_agent, &claude_executable, &codex_executable);
+    let result = init_with_content(path, &content, force || file_exists);
+    outcome_to_init_envelope(path, result)
+}
+
+/// Prompts for `default_agent` (Select, `claude`/`codex`/`none`) and the two
+/// provider executables (Text, Enter accepts the shown default). A
+/// prompt-level I/O failure falls back to that field's own default rather
+/// than propagating -- consistent with `run_config_init_interactive`'s
+/// Esc-as-No handling for the overwrite confirm.
+fn run_config_init_wizard() -> (Option<Agent>, String, String) {
+    let default_agent_choice = dialoguer::Select::new()
+        .with_prompt("default_agent")
+        .items(["claude", "codex", "none"])
+        .default(0)
+        .interact()
+        .unwrap_or(0);
+    let default_agent = match default_agent_choice {
+        0 => Some(Agent::Claude),
+        1 => Some(Agent::Codex),
+        _ => None,
+    };
+    let claude_executable = dialoguer::Input::<String>::new()
+        .with_prompt("providers.claude.executable")
+        .default("claude".to_string())
+        .interact_text()
+        .unwrap_or_else(|_| "claude".to_string());
+    let codex_executable = dialoguer::Input::<String>::new()
+        .with_prompt("providers.codex.executable")
+        .default("codex".to_string())
+        .interact_text()
+        .unwrap_or_else(|_| "codex".to_string());
+    (default_agent, claude_executable, codex_executable)
+}
+
+fn run_config_init(json: bool, override_path: Option<&Path>, yes: bool, force: bool) -> i32 {
+    let path = match resolve_init_path(override_path) {
+        Ok(p) => p,
+        Err(envelope) => return emit_config_init(json, *envelope),
+    };
+
+    // PRD 08-08-pre-0-1-0-cli-skills-markdown-init D4: the wizard triggers
+    // only on a TTY (both streams -- this UI both prompts on stdout and
+    // reads a response), never with `--json`, and never with `--yes`.
+    // `assert_cmd::Command` never provides a controlling terminal, so this
+    // branch is structurally unreachable from the automated test suite,
+    // exactly like `start_query_spinner` (this same file).
+    let interactive =
+        !json && !yes && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let envelope = if interactive {
+        run_config_init_interactive(&path, force)
+    } else {
+        write_template_init(&path, force)
+    };
+    emit_config_init(json, envelope)
+}
+
+fn emit_config_init(json: bool, envelope: ConfigInitEnvelope) -> i32 {
     let exit = envelope
         .error
         .as_ref()
@@ -651,7 +819,7 @@ fn argument_invalid_query(message: impl Into<String>) -> QueryEnvelope {
     )
 }
 
-fn emit_query(json: bool, envelope: QueryEnvelope) -> i32 {
+fn emit_query(json: bool, plain: bool, envelope: QueryEnvelope) -> i32 {
     let exit = envelope
         .error
         .as_ref()
@@ -666,7 +834,17 @@ fn emit_query(json: bool, envelope: QueryEnvelope) -> i32 {
         // success shape.
         eprint_error_line(err);
     } else {
-        print!("{}", render_human(&envelope));
+        let human = render_human(&envelope);
+        // PRD 08-08-pre-0-1-0-cli-skills-markdown-init D3/AC2: TTY-render
+        // through termimad unless `--plain`, a piped/redirected stdout, or
+        // `NO_COLOR` (any value -- no-color.org: presence, not content,
+        // disables color) opt out. Every branch here is byte-for-byte
+        // today's raw `render_human` output except the last.
+        if !plain && std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+            print!("{}", render_markdown_ansi(&human, None));
+        } else {
+            print!("{human}");
+        }
     }
     exit as i32
 }
@@ -725,6 +903,7 @@ fn run_query_command(
     override_path: Option<&Path>,
     wiki_values: Vec<String>,
     agent: Option<Agent>,
+    plain: bool,
     question_positional: Option<String>,
 ) -> i32 {
     // spec §5.1: "accepts one and only one --wiki. Repeating it or supplying
@@ -735,6 +914,7 @@ fn run_query_command(
         [] => {
             return emit_query(
                 json,
+                plain,
                 argument_invalid_query(format!(
                     "query requires exactly one --wiki ({QUERY_USAGE_HINT})"
                 )),
@@ -743,6 +923,7 @@ fn run_query_command(
         _ => {
             return emit_query(
                 json,
+                plain,
                 argument_invalid_query(format!(
                     "query accepts exactly one --wiki; repeating it or supplying \"all\" is invalid ({QUERY_USAGE_HINT})"
                 )),
@@ -752,16 +933,16 @@ fn run_query_command(
 
     let question_bytes = match resolve_question_bytes(question_positional) {
         Ok(bytes) => bytes,
-        Err(err) => return emit_query(json, query_failure_envelope(None, None, err)),
+        Err(err) => return emit_query(json, plain, query_failure_envelope(None, None, err)),
     };
 
     let config_path = match resolve_config_path(override_path) {
         Ok(p) => p,
-        Err(e) => return emit_query(json, query_failure_envelope(None, None, e)),
+        Err(e) => return emit_query(json, plain, query_failure_envelope(None, None, e)),
     };
     let config = match Config::load(&config_path) {
         Ok(c) => c,
-        Err(e) => return emit_query(json, query_failure_envelope(None, None, e)),
+        Err(e) => return emit_query(json, plain, query_failure_envelope(None, None, e)),
     };
 
     // spec §5.1: `--agent` is optional only when the wiki's derived
@@ -779,6 +960,7 @@ fn run_query_command(
                 None => {
                     return emit_query(
                         json,
+                        plain,
                         argument_invalid_query(
                             "--agent is required: no default_agent is configured and enabled for this wiki",
                         ),
@@ -791,7 +973,7 @@ fn run_query_command(
 
     let cache_path = match resolve_cache_path() {
         Ok(p) => p,
-        Err(e) => return emit_query(json, query_failure_envelope(None, None, e)),
+        Err(e) => return emit_query(json, plain, query_failure_envelope(None, None, e)),
     };
 
     let request = QueryRequest {
@@ -814,7 +996,7 @@ fn run_query_command(
     if let Some(pb) = spinner {
         pb.finish_and_clear();
     }
-    emit_query(json, envelope)
+    emit_query(json, plain, envelope)
 }
 
 /// Starts a stderr-only spinner for the duration of the blocking provider

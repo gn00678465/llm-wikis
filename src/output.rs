@@ -189,3 +189,19 @@ pub fn render_human(envelope: &QueryEnvelope) -> String {
     }
     out
 }
+
+/// Converts already-rendered human-mode output (`render_human`'s own
+/// output) to terminal ANSI styling via `termimad` (PRD
+/// 08-08-pre-0-1-0-cli-skills-markdown-init D3/AC2). Pure string->string
+/// conversion, no I/O, no TTY/env reads -- *whether* to call this at all is
+/// `cli.rs::emit_query`'s routing decision, not this function's, mirroring
+/// how `render_human` above stays a pure formatter and leaves stream
+/// routing to the caller. `width: None` lets termimad auto-detect the real
+/// terminal width; a fixed `Some(width)` is used by tests for determinism.
+pub fn render_markdown_ansi(markdown: &str, width: Option<usize>) -> String {
+    let skin = termimad::MadSkin::default();
+    match width {
+        Some(w) => skin.text(markdown, Some(w)).to_string(),
+        None => skin.term_text(markdown).to_string(),
+    }
+}

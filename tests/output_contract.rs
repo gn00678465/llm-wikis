@@ -3,6 +3,7 @@ use llm_wikis::model::KnowledgeStatus;
 use llm_wikis::output::{
     Agent, Citation, PROVIDER_WARNING_CODE, QueryEnvelope, RawFormat, SCHEMA_VERSION, Warning,
     WarningSource, WrapperWarningCode, order_warnings, render_human, render_json,
+    render_markdown_ansi,
 };
 
 fn success_envelope() -> QueryEnvelope {
@@ -160,4 +161,24 @@ fn human_mode_prints_answer_then_gaps_then_warnings_in_order() {
     let warning_pos = rendered.find("Claude read tools").expect("warning present");
     assert!(answer_pos < gap_pos, "answer must precede gaps");
     assert!(gap_pos < warning_pos, "gaps must precede warnings");
+}
+
+// PRD 08-08-pre-0-1-0-cli-skills-markdown-init D3/AC2: `render_markdown_ansi`
+// is a pure string->string conversion -- no I/O, no TTY/env reads (design.md
+// §1.3). A fixed `width` makes the output deterministic for these tests.
+#[test]
+fn render_markdown_ansi_produces_escape_bytes_for_a_heading_and_bold_text() {
+    let rendered = render_markdown_ansi("# Heading\n\n**bold** text", Some(80));
+    assert!(
+        rendered.contains('\u{1b}'),
+        "expected ANSI escape bytes in rendered output: {rendered:?}"
+    );
+    assert!(rendered.contains("Heading"));
+    assert!(rendered.contains("bold"));
+}
+
+#[test]
+fn render_markdown_ansi_round_trips_plain_text_without_markdown_syntax() {
+    let rendered = render_markdown_ansi("just plain text, no markdown here", Some(80));
+    assert!(rendered.contains("just plain text, no markdown here"));
 }
