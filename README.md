@@ -57,8 +57,13 @@ non-prerelease tag and fails with an explicit message if there isn't one yet.
 
 ## Minimal configuration
 
-`llm-wikis config init` writes a platform-native template config (never
-overwriting an existing one). A minimal registry looks like:
+`llm-wikis config init` writes a platform-native template config, never
+merging into an existing one. Run interactively (a real terminal, no
+`--yes`), it runs a short setup wizard for `default_agent` and the two
+provider executables; piped/scripted (or `--json`, or `--yes`) it writes
+the fixed template directly. An existing destination needs `--force` to
+overwrite (a TTY without `--force` asks first; a script without `--force`
+fails closed with `CONFIG_EXISTS`). A minimal registry looks like:
 
 ```toml
 config_version = 1
@@ -103,10 +108,36 @@ and [`docs/llm-wikis.md`](docs/llm-wikis.md) for every field's meaning.
 llm-wikis list
 llm-wikis doctor --wiki my-wiki --agent claude
 llm-wikis query --wiki my-wiki --agent claude -- "What does the ingest pipeline do?"
+llm-wikis query --wiki my-wiki --agent claude --plain -- "What does the ingest pipeline do?"
 ```
+
+On a real terminal, `query`'s human-mode answer renders markdown with
+terminal styling; `--plain` forces raw markdown instead (also forced
+automatically when stdout is piped/redirected or `NO_COLOR` is set).
 
 Full command reference, JSON output shape, and error codes:
 [`docs/llm-wikis.md`](docs/llm-wikis.md).
+
+## AI agent skill
+
+`skills/llm-wikis-usage/` teaches an AI coding agent how to drive this CLI
+(commands, `--json` envelope shape, exit codes, and error troubleshooting).
+Install it by copying the directory into the agent's own skills location:
+
+```sh
+# Claude Code (personal scope)
+cp -r skills/llm-wikis-usage ~/.claude/skills/
+
+# Codex CLI
+cp -r skills/llm-wikis-usage .agents/skills/
+```
+
+Or install directly from this repository with
+[`skills`](https://www.npmjs.com/package/skills):
+
+```sh
+npx skills add https://github.com/gn00678465/llm-wikis --skill llm-wikis-usage
+```
 
 ## Development
 
