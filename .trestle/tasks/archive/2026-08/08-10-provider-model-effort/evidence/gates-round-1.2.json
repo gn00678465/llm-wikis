@@ -1,0 +1,186 @@
+{
+  "taskName": "08-10-provider-model-effort",
+  "round": 1,
+  "verdict": "block",
+  "gates": [
+    {
+      "id": "AC1",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC1: `ProviderConfig` 支援 optional `model` 與 `effort`；未設定時 Claude 與 Codex 的 argv 與本任務前完全相同。 (evidence: src/config.rs ProviderConfig, tests/claude_adapter.rs test exact_argv, tests/codex_adapter.rs test exact_argv)"
+    },
+    {
+      "id": "AC2",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC2: Claude exact-argv 測試涵蓋 `--model` 與 `--effort`，且兩者各為獨立 argv value。 (evidence: tests/claude_adapter.rs test exact_argv_with_model_and_effort)"
+    },
+    {
+      "id": "AC3",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC3: Codex exact-argv 測試涵蓋 `--model` 與 model_reasoning_effort override。 (evidence: tests/codex_adapter.rs test exact_argv_with_model_and_effort)"
+    },
+    {
+      "id": "AC4",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC4: version probe 與 auth status probe 的 argv 不含 model 或 effort。 (evidence: tests/claude_adapter.rs test probe_argv_never_carries_model_or_effort, tests/codex_adapter.rs test probe_argv_never_carries_model_or_effort)"
+    },
+    {
+      "id": "AC5",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC5: 空值、控制字元、空白、超長、非法字元的 model/effort 在 config load 階段即失敗於 CONFIG_INVALID。 (evidence: tests/config_contract.rs test model_and_effort_validation_rejects_bad_values)"
+    },
+    {
+      "id": "AC6",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC6: 問題內容與 model 值仍以分離 argv/stdin 傳遞，不經 shell；含雙引號的 Codex override value 在 Windows batch shim 路徑逐字送達。 (evidence: tests/process_supervisor.rs test batch_shim_preserves_quoted_config_override_argument)"
+    },
+    {
+      "id": "AC7",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC7: model/effort 進入 compatibility fingerprint：改 model 或 effort 會讓 既有 probe 記錄失效。 (evidence: tests/probes.rs test fingerprint_changes_when_model_or_effort_changes)"
+    },
+    {
+      "id": "AC8",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC8: `config init` 樣板、config.example.toml、README 與 operator guide 都 說明 model/effort 設定；JSON output contract 不受影響。 (evidence: config.example.toml, README.md, docs/llm-wikis.md, docs/2026-07-28-llm-wikis-external-query-design.md, tests/config_init.rs)"
+    },
+    {
+      "id": "verify-declared-empty",
+      "category": "verification",
+      "ok": false,
+      "detail": "\"## Verification Plan\" section exists but has no commands (missing or empty fenced code block)"
+    },
+    {
+      "id": "G1",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo build --all-targets --all-features"
+    },
+    {
+      "id": "G2",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo fmt --all --check"
+    },
+    {
+      "id": "G3",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo clippy --all-targets --all-features -- -D warnings"
+    },
+    {
+      "id": "G4",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo test --all-targets --all-features -- --test-threads=1"
+    },
+    {
+      "id": "G5",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo test --test config_contract -- --test-threads=1"
+    },
+    {
+      "id": "G6",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo test --test claude_adapter -- --test-threads=1"
+    },
+    {
+      "id": "G7",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo test --test codex_adapter -- --test-threads=1"
+    },
+    {
+      "id": "G8",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo test --test probes -- --test-threads=1"
+    },
+    {
+      "id": "G9",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo test --test spec_drift -- --test-threads=1"
+    },
+    {
+      "id": "G10",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"pub model: Option<String>\" src/config.rs"
+    },
+    {
+      "id": "G11",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"pub effort: Option<String>\" src/config.rs"
+    },
+    {
+      "id": "G12",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"model_reasoning_effort\" src/providers/codex.rs"
+    },
+    {
+      "id": "G13",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -n -- \"--effort\" src/providers/claude.rs"
+    },
+    {
+      "id": "G14",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"PROVIDER_CONTRACT_VERSION: &str = \\\"2\\\"\" src/query.rs"
+    },
+    {
+      "id": "G15",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"model_declaration\" src/query.rs src/doctor.rs"
+    },
+    {
+      "id": "G16",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"effort\" config.example.toml"
+    },
+    {
+      "id": "G17",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"effort\" README.md"
+    },
+    {
+      "id": "G18",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"effort\" docs/llm-wikis.md"
+    },
+    {
+      "id": "G19",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"effort\" docs/2026-07-28-llm-wikis-external-query-design.md"
+    }
+  ],
+  "manual": [
+    {
+      "id": "G20",
+      "check": "未設定 model/effort 時的 Claude/Codex argv 與本任務前逐位元相同 —— evaluator 直接比對兩個未帶新參數的 exact_argv 測試相對於 base commit 的 diff，該兩個測試的 expected 向量必須完全沒有變動"
+    },
+    {
+      "id": "G21",
+      "check": "version probe 與 auth probe 的 argv 不含 model/effort —— evaluator 確認 probe 呼叫端仍自行列出 args、未改走 build_argv"
+    }
+  ],
+  "rerun": true
+}

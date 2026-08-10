@@ -103,9 +103,11 @@
 
 ## Verification Plan
 
-1. `cargo fmt --all --check`
-2. `cargo clippy --all-targets --all-features -- -D warnings`
-3. `cargo test --all-targets --all-features -- --test-threads=1`
+```
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features -- --test-threads=1
+```
 
 已知例外（非本任務造成）：`tests/process_supervisor.rs` 兩個 deadline-race 測試
 在高延遲環境偶發失敗，見 AGENTS.md。

@@ -16,3 +16,9 @@ query 人類模式新增 termimad TTY 渲染（--plain 逃生口，pipe/--json b
 
 Commits: 7300381, ae335d9, ff04822, 62722b3
 
+## 2026-08-10T22:43:10.893Z — provider 設定支援 Claude/Codex model 與 reasoning effort
+
+issue #7：[providers.<agent>] 新增 optional model/effort，未設定時 argv 逐位元不變（兩個原有 exact_argv 測試 expected 向量一行未動）。Claude 映射 --model/--effort；Codex 因無獨立 effort flag 且以 --ignore-user-config 啟動，映射為 --model 與 -c model_reasoning_effort="…"，並以真的 spawn .cmd shim 的測試證明含雙引號 argv 逐字送達。只套用於 query 與 doctor --live，version/auth probe 結構上不沾。model/effort 納入 compatibility fingerprint、PROVIDER_CONTRACT_VERSION 升為 2（使用者選定：改 model/effort 需重跑 doctor --live）。規格 §6.1/§15.1、operator 指南、README、config.example.toml、init 樣板同步。gates round 1 verdict pass（30 gates 全過，含未略過的 G4 全量測試）；期間曾因主機行程列舉延遲導致兩個 deadline-race 測試失敗，以 base commit 實測比對確認為環境問題並蒸餾成 AGENTS.md 新規則。另有 Sonnet subagent 獨立驗證九項驗收條件全數 CONFIRMED、無 findings。
+
+Commits: 38138b8 261e3ac b2dab17 27303d1
+

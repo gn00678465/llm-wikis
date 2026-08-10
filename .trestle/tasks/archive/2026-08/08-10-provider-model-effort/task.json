@@ -1,7 +1,7 @@
 {
   "id": "08-10-provider-model-effort",
   "title": "provider 設定支援 Claude/Codex model 與 reasoning effort",
-  "status": "in_progress",
+  "status": "completed",
   "complexity": "complex",
   "created": "2026-08-10T00:00:00.000Z",
   "developer": "Madao",
