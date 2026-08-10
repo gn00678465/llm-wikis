@@ -329,6 +329,12 @@ Use this to point at a specific install (a pinned version, a wrapper script
 location, a non-default install directory) instead of whatever `claude`/
 `codex` resolves to on `PATH`.
 
+On Windows a bare name resolves through `PATHEXT` first, across the whole
+`PATH`; an extensionless file is only used when no `PATHEXT` candidate exists
+anywhere. So `executable = "codex"` selects `codex.cmd` even when an npm
+install has dropped an extensionless POSIX shim beside it — naming the `.cmd`
+explicitly is supported but not required.
+
 ### 2.7 Project skills and Claude local plugins
 
 Two load modes exist per provider:
