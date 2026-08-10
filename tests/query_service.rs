@@ -142,6 +142,8 @@ fn build_config(fixture: &Fixture, agent: Agent) -> Config {
 
     let provider_cfg = Some(ProviderConfig {
         executable: Some(fixture.executable_path.display().to_string()),
+        model: None,
+        effort: None,
     });
     let mut providers = ProvidersConfig {
         claude: None,
@@ -259,6 +261,8 @@ fn matching_probe_record(fixture: &Fixture, config: &Config, agent: Agent) -> Pr
             skill_path: provider_table.skill_path.as_deref(),
             plugin_dir: provider_table.plugin_dir.as_deref(),
             executable_declaration: &executable_declaration,
+            model_declaration: None,
+            effort_declaration: None,
             provider_contract_version: PROVIDER_CONTRACT_VERSION,
         });
     ProbeRecord {

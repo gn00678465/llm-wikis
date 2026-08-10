@@ -233,6 +233,17 @@ impl ProvidersConfig {
 pub struct ProviderConfig {
     #[serde(default)]
     pub executable: Option<String>,
+    /// Optional provider model, passed through as one argv value on `query`
+    /// and `doctor --live` only (issue #7). Unset means "whatever the provider
+    /// CLI would pick on its own" — nothing extra reaches the argv.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Optional reasoning effort, mapped per provider (Claude `--effort`,
+    /// Codex `model_reasoning_effort`). Whether a given model supports a given
+    /// level is the provider CLI's question, not this wrapper's — see
+    /// [`validate_effort`].
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 /// `load` (spec §6.2). Exactly two supported modes.
@@ -390,17 +401,11 @@ impl Config {
             return Err(config_invalid("config_version must equal 1"));
         }
         self.runtime.validate()?;
-        if let Some(ProviderConfig {
-            executable: Some(exe),
-        }) = &self.providers.claude
-        {
-            validate_executable(exe)?;
+        if let Some(table) = &self.providers.claude {
+            validate_provider_table(table)?;
         }
-        if let Some(ProviderConfig {
-            executable: Some(exe),
-        }) = &self.providers.codex
-        {
-            validate_executable(exe)?;
+        if let Some(table) = &self.providers.codex {
+            validate_provider_table(table)?;
         }
         for (id, wiki) in &self.wikis {
             validate_wiki_id(id)?;
@@ -484,6 +489,93 @@ pub fn validate_query_prompt(prompt: &str) -> Result<(), AppError> {
     if prompt.len() > 500 {
         return Err(config_invalid(
             "query_prompt must be at most 500 UTF-8 bytes",
+        ));
+    }
+    Ok(())
+}
+
+/// Every value-shape rule a `[providers.<agent>]` table owns (spec §6.1;
+/// issue #7 for `model`/`effort`). Each field is independently optional.
+fn validate_provider_table(table: &ProviderConfig) -> Result<(), AppError> {
+    if let Some(exe) = &table.executable {
+        validate_executable(exe)?;
+    }
+    if let Some(model) = &table.model {
+        validate_model(model)?;
+    }
+    if let Some(effort) = &table.effort {
+        validate_effort(effort)?;
+    }
+    Ok(())
+}
+
+/// Longest accepted `model` value, in UTF-8 bytes. Well clear of every
+/// published alias and fully qualified model ID, and short enough that a
+/// pasted paragraph is rejected as configuration rather than forwarded to a
+/// provider.
+const MAX_MODEL_BYTES: usize = 128;
+
+/// Longest accepted `effort` value, in UTF-8 bytes.
+const MAX_EFFORT_BYTES: usize = 32;
+
+/// A provider `model` is one model name — an alias or a fully qualified ID —
+/// passed as a single argv value (issue #7). The character set is deliberately
+/// *not* narrowed to a known list: new model IDs must not require an edit to
+/// this deserialization schema before an operator can name one. What is
+/// checked is only what makes a value unusable or unsafe as a lone argv
+/// element.
+pub fn validate_model(value: &str) -> Result<(), AppError> {
+    if value.is_empty() {
+        return Err(config_invalid("provider model must not be empty"));
+    }
+    if value.len() > MAX_MODEL_BYTES {
+        return Err(config_invalid(format!(
+            "provider model must not exceed {MAX_MODEL_BYTES} bytes"
+        )));
+    }
+    if value.chars().any(|c| c.is_control()) {
+        return Err(config_invalid(
+            "provider model must not contain control characters",
+        ));
+    }
+    if value.chars().any(|c| c.is_whitespace()) {
+        return Err(config_invalid(
+            "provider model must be one model name, not arguments",
+        ));
+    }
+    // A leading `-` is the one shape that would read as a flag rather than a
+    // value to the provider CLI's own parser, even though it reaches that
+    // parser as a separate argv element.
+    if value.starts_with('-') {
+        return Err(config_invalid("provider model must not start with '-'"));
+    }
+    Ok(())
+}
+
+/// A provider `effort` is one short, safe token (issue #7). Which levels a
+/// given provider/model actually supports is deliberately left to the provider
+/// CLI: an unsupported level comes back as an ordinary provider failure, so a
+/// newly published level works here without a schema change.
+pub fn validate_effort(value: &str) -> Result<(), AppError> {
+    if value.is_empty() {
+        return Err(config_invalid("provider effort must not be empty"));
+    }
+    if value.len() > MAX_EFFORT_BYTES {
+        return Err(config_invalid(format!(
+            "provider effort must not exceed {MAX_EFFORT_BYTES} bytes"
+        )));
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(config_invalid(
+            "provider effort must contain only letters, digits, '_', and '-'",
+        ));
+    }
+    if !value.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+        return Err(config_invalid(
+            "provider effort must start with a letter or digit",
         ));
     }
     Ok(())
@@ -1044,9 +1136,14 @@ default_agent = "claude"
 
 [providers.claude]
 executable = "claude"
+# Optional. Leave unset to use whatever the provider CLI picks by default.
+# model  = "opus"
+# effort = "high"
 
 [providers.codex]
 executable = "codex"
+# model  = "gpt-5.6-sol"
+# effort = "high"
 
 [runtime]
 timeout_seconds    = 180
@@ -1099,9 +1196,14 @@ pub fn render_init_template(
 {default_agent_line}
 [providers.claude]
 executable = "{claude_executable}"
+# Optional. Leave unset to use whatever the provider CLI picks by default.
+# model  = "opus"
+# effort = "high"
 
 [providers.codex]
 executable = "{codex_executable}"
+# model  = "gpt-5.6-sol"
+# effort = "high"
 
 [runtime]
 timeout_seconds    = 180

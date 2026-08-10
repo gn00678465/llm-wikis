@@ -141,7 +141,7 @@ fn exact_argv() {
     let content_root = Path::new("D:/Wikis/agents");
     let mcp_config = Path::new("D:/Temp/llm-wikis-xyz/mcp-config.json");
     let schema_text = schema();
-    let args = build_argv(content_root, mcp_config, &schema_text, None);
+    let args = build_argv(content_root, mcp_config, &schema_text, None, None, None);
     let expected: Vec<OsString> = vec![
         OsString::from("--add-dir"),
         OsString::from(content_root),
@@ -179,6 +179,96 @@ fn exact_argv() {
     // catches the constant and the real argv drifting from each other.
     assert_eq!(DISABLE_ALL_HOOKS_SETTINGS, r#"{"disableAllHooks":true}"#);
     assert_eq!(SETTING_SOURCES_PROJECT, "project");
+}
+
+// Issue #7: `model`/`effort` are appended, in that order, after everything the
+// unconfigured argv already carried. `exact_argv` above is the other half of
+// this pair — it is what proves an operator who configures neither still gets
+// the byte-identical argv this wrapper has always sent.
+#[test]
+fn exact_argv_with_model_and_effort() {
+    let content_root = Path::new("D:/Wikis/agents");
+    let mcp_config = Path::new("D:/Temp/llm-wikis-xyz/mcp-config.json");
+    let schema_text = schema();
+    let baseline = build_argv(content_root, mcp_config, &schema_text, None, None, None);
+    let args = build_argv(
+        content_root,
+        mcp_config,
+        &schema_text,
+        None,
+        Some("opus"),
+        Some("high"),
+    );
+
+    let mut expected = baseline.clone();
+    expected.push(OsString::from("--model"));
+    expected.push(OsString::from("opus"));
+    expected.push(OsString::from("--effort"));
+    expected.push(OsString::from("high"));
+    assert_eq!(args, expected);
+    // Each value is its own argv element — never glued onto its flag, never
+    // spliced into a single shell-ish string.
+    assert_eq!(args[args.len() - 3], OsString::from("opus"));
+    assert_eq!(args[args.len() - 1], OsString::from("high"));
+}
+
+#[test]
+fn model_and_effort_are_independently_optional() {
+    let content_root = Path::new("D:/Wikis/agents");
+    let mcp_config = Path::new("D:/Temp/llm-wikis-xyz/mcp-config.json");
+    let schema_text = schema();
+
+    let model_only = build_argv(
+        content_root,
+        mcp_config,
+        &schema_text,
+        None,
+        Some("opus"),
+        None,
+    );
+    assert!(model_only.iter().any(|a| a == "--model"));
+    assert!(!model_only.iter().any(|a| a == "--effort"));
+
+    let effort_only = build_argv(
+        content_root,
+        mcp_config,
+        &schema_text,
+        None,
+        None,
+        Some("high"),
+    );
+    assert!(!effort_only.iter().any(|a| a == "--model"));
+    assert!(effort_only.iter().any(|a| a == "--effort"));
+}
+
+// The version and auth probes are a separate, fixed argv built by their own
+// call sites (`probe_request`), never by `build_argv`. This pins that
+// separation: a future refactor that routes the probes through `build_argv`
+// would start sending model/effort on `--version`, which spec §10.1's bounded
+// probe contract does not allow.
+#[test]
+fn probe_argv_never_carries_model_or_effort() {
+    let runner = FakeProcessRunner::new();
+    runner.push_response(Ok(completed_outcome(b"1.2.3", b"", 0)));
+    runner.push_response(Ok(completed_outcome(br#"{"authenticated":true}"#, b"", 0)));
+    let exe = ResolvedExecutable {
+        path: PathBuf::from("D:/tools/claude.exe"),
+        kind: ExecutableKind::Native,
+    };
+    let adapter = ClaudeAdapter;
+    adapter.version(&runner, &exe).expect("version probe");
+    adapter.auth_status(&runner, &exe).expect("auth probe");
+
+    for captured in runner.captured_requests() {
+        assert!(
+            !captured
+                .args
+                .iter()
+                .any(|a| a == "--model" || a == "--effort"),
+            "probe argv must stay free of model/effort: {:?}",
+            captured.args
+        );
+    }
 }
 
 /// Regression test for a review-found vulnerability (PR #1, Codex review
@@ -225,7 +315,7 @@ fn hook_neutralization_settings_flag_present_without_excluding_setting_sources()
     let content_root = Path::new("D:/Wikis/agents");
     let mcp_config = Path::new("D:/Temp/llm-wikis-xyz/mcp-config.json");
     let schema_text = schema();
-    let args = build_argv(content_root, mcp_config, &schema_text, None);
+    let args = build_argv(content_root, mcp_config, &schema_text, None, None, None);
 
     let schema_pos = args.iter().position(|a| a == "--json-schema").unwrap();
     assert_eq!(
@@ -254,7 +344,14 @@ fn hook_neutralization_settings_flag_present_without_excluding_setting_sources()
     // Even with a local_plugin --plugin-dir, the hook-neutralization flag
     // still precedes it — a plugin-declared hook is neutralized too.
     let plugin_dir = Path::new("D:/Wikis/agents/plugins/knowledge-tools");
-    let with_plugin = build_argv(content_root, mcp_config, &schema_text, Some(plugin_dir));
+    let with_plugin = build_argv(
+        content_root,
+        mcp_config,
+        &schema_text,
+        Some(plugin_dir),
+        None,
+        None,
+    );
     let settings_pos = with_plugin.iter().position(|a| a == "--settings").unwrap();
     let plugin_pos = with_plugin
         .iter()
@@ -273,11 +370,18 @@ fn plugin_dir_flag() {
     let content_root = Path::new("D:/Wikis/agents");
     let mcp_config = Path::new("D:/Temp/llm-wikis-xyz/mcp-config.json");
     let schema_text = schema();
-    let without_plugin = build_argv(content_root, mcp_config, &schema_text, None);
+    let without_plugin = build_argv(content_root, mcp_config, &schema_text, None, None, None);
     assert!(!without_plugin.contains(&OsString::from("--plugin-dir")));
 
     let plugin_dir = Path::new("D:/Wikis/agents/plugins/knowledge-tools");
-    let with_plugin = build_argv(content_root, mcp_config, &schema_text, Some(plugin_dir));
+    let with_plugin = build_argv(
+        content_root,
+        mcp_config,
+        &schema_text,
+        Some(plugin_dir),
+        None,
+        None,
+    );
     let pos = with_plugin
         .iter()
         .position(|a| a == "--plugin-dir")
@@ -290,7 +394,7 @@ fn tool_restriction() {
     let content_root = Path::new("D:/Wikis/agents");
     let mcp_config = Path::new("D:/Temp/llm-wikis-xyz/mcp-config.json");
     let schema_text = schema();
-    let args = build_argv(content_root, mcp_config, &schema_text, None);
+    let args = build_argv(content_root, mcp_config, &schema_text, None, None, None);
     let pos = args.iter().position(|a| a == "--tools").unwrap();
     assert_eq!(args[pos + 1], OsString::from("Read,Grep,Glob"));
     assert!(!args.iter().any(|a| a == "--dangerously-skip-permissions"));
@@ -301,7 +405,7 @@ fn no_session_persistence() {
     let content_root = Path::new("D:/Wikis/agents");
     let mcp_config = Path::new("D:/Temp/llm-wikis-xyz/mcp-config.json");
     let schema_text = schema();
-    let args = build_argv(content_root, mcp_config, &schema_text, None);
+    let args = build_argv(content_root, mcp_config, &schema_text, None, None, None);
     assert!(args.iter().any(|a| a == "--no-session-persistence"));
 }
 
@@ -310,7 +414,7 @@ fn capability_exclusion() {
     let content_root = Path::new("D:/Wikis/agents");
     let mcp_config = Path::new("D:/Temp/llm-wikis-xyz/mcp-config.json");
     let schema_text = schema();
-    let args = build_argv(content_root, mcp_config, &schema_text, None);
+    let args = build_argv(content_root, mcp_config, &schema_text, None, None, None);
     let forbidden = [
         "--dangerously-skip-permissions",
         "--allow-dangerously-skip-permissions",
@@ -347,7 +451,7 @@ fn json_schema_inline() {
     let content_root = Path::new("D:/Wikis/agents");
     let mcp_config = Path::new("D:/Temp/llm-wikis-xyz/mcp-config.json");
     let schema_text = schema();
-    let args = build_argv(content_root, mcp_config, &schema_text, None);
+    let args = build_argv(content_root, mcp_config, &schema_text, None, None, None);
     let pos = args.iter().position(|a| a == "--json-schema").unwrap();
     let value = &args[pos + 1];
     assert_eq!(value, &OsString::from(&schema_text));
@@ -396,7 +500,7 @@ fn no_prompt_in_argv() {
     let content_root = Path::new("D:/Wikis/agents");
     let mcp_config = Path::new("D:/Temp/llm-wikis-xyz/mcp-config.json");
     let schema_text = schema();
-    let args = build_argv(content_root, mcp_config, &schema_text, None);
+    let args = build_argv(content_root, mcp_config, &schema_text, None, None, None);
     let joined: Vec<String> = args
         .iter()
         .map(|a| a.to_string_lossy().to_string())
@@ -445,6 +549,8 @@ fn provider_request(executable: ResolvedExecutable) -> ProviderRequest {
         query_prompt: "Use the wiki-query skill to answer from this wiki.".to_string(),
         question: "What does this wiki cover?".to_string(),
         plugin_dir: None,
+        model: None,
+        effort: None,
         timeout: Duration::from_secs(30),
         max_stdout_bytes: 1_048_576,
         max_stderr_bytes: 65_536,

@@ -111,6 +111,8 @@ pub fn build_argv(
     mcp_config_path: &Path,
     json_schema: &str,
     plugin_dir: Option<&Path>,
+    model: Option<&str>,
+    effort: Option<&str>,
 ) -> Vec<OsString> {
     let mut args = vec![
         OsString::from("--add-dir"),
@@ -149,6 +151,17 @@ pub fn build_argv(
     if let Some(dir) = plugin_dir {
         args.push(OsString::from("--plugin-dir"));
         args.push(OsString::from(dir));
+    }
+    // Issue #7: appended last, and only when configured, so an operator who
+    // sets neither gets the byte-identical argv this wrapper has always sent.
+    // Each value is its own `OsString` — never spliced into another argument.
+    if let Some(model) = model {
+        args.push(OsString::from("--model"));
+        args.push(OsString::from(model));
+    }
+    if let Some(effort) = effort {
+        args.push(OsString::from("--effort"));
+        args.push(OsString::from(effort));
     }
     args
 }
@@ -361,6 +374,8 @@ impl ProviderAdapter for ClaudeAdapter {
             mcp_config.path(),
             &schema,
             request.plugin_dir.as_deref(),
+            request.model.as_deref(),
+            request.effort.as_deref(),
         );
         // R-31 (PR #1 Codex review iteration 5 finding 3): the wiki-settings
         // surface check is the genuinely last thing before the child is

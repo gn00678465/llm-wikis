@@ -142,6 +142,12 @@ pub struct ProviderRequest {
     pub query_prompt: String,
     pub question: String,
     pub plugin_dir: Option<PathBuf>,
+    /// Optional provider model/reasoning effort from `[providers.<agent>]`
+    /// (issue #7). Present only on the `query` path — which `doctor --live`
+    /// reuses — never on the version or auth probes, which build their own
+    /// fixed argv.
+    pub model: Option<String>,
+    pub effort: Option<String>,
     pub timeout: Duration,
     pub max_stdout_bytes: usize,
     pub max_stderr_bytes: usize,

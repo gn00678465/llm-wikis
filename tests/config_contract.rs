@@ -391,6 +391,111 @@ fn provider_executable_with_arguments_or_shell_syntax_rejected() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Optional provider `model` / `effort` (issue #7)
+// ---------------------------------------------------------------------------
+
+/// Builds a registry whose `[providers.claude]` table carries the supplied
+/// extra lines; codex keeps the plain declaration so only one side varies.
+fn config_with_claude_provider_lines(extra: &str) -> String {
+    format!(
+        "config_version = 1\n\n[providers.claude]\nexecutable = \"claude\"\n{extra}\n[providers.codex]\nexecutable = \"codex\"\n"
+    )
+}
+
+#[test]
+fn provider_model_and_effort_are_optional_and_default_to_none() {
+    let cfg = Config::load_str(BASE_HEADER).expect("no model/effort is still valid");
+    let claude = cfg.providers.claude.as_ref().unwrap();
+    assert_eq!(claude.model, None);
+    assert_eq!(claude.effort, None);
+}
+
+#[test]
+fn provider_model_and_effort_round_trip() {
+    let text = config_with_claude_provider_lines("model = \"opus\"\neffort = \"high\"\n");
+    let cfg = Config::load_str(&text).expect("model/effort are accepted");
+    let claude = cfg.providers.claude.as_ref().unwrap();
+    assert_eq!(claude.model.as_deref(), Some("opus"));
+    assert_eq!(claude.effort.as_deref(), Some("high"));
+}
+
+// Aliases and fully qualified model IDs both have to survive: the point of
+// issue #7's validation rules is that a future model ID shape must not need a
+// deserialization-schema edit before an operator can name it.
+#[test]
+fn provider_model_accepts_aliases_and_full_ids() {
+    for good in [
+        "opus",
+        "gpt-5.6-sol",
+        "claude-opus-4-1-20250805",
+        "us.anthropic.claude-opus-4-1",
+        "claude-opus-5[1m]",
+    ] {
+        let text = config_with_claude_provider_lines(&format!("model = \"{good}\"\n"));
+        assert!(
+            Config::load_str(&text).is_ok(),
+            "expected acceptance for model {good:?}"
+        );
+    }
+}
+
+#[test]
+fn provider_model_rejects_empty_control_characters_whitespace_and_overlong_values() {
+    let overlong = "m".repeat(129);
+    for bad in [
+        "",
+        "opus\nmore",
+        "opus\\u0007",
+        "opus high",
+        "--model",
+        overlong.as_str(),
+    ] {
+        let text = config_with_claude_provider_lines(&format!("model = \"{bad}\"\n"));
+        let err = Config::load_str(&text).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ConfigInvalid, "model {bad:?}");
+    }
+}
+
+// The effort token set stays deliberately open — provider CLIs own the
+// question of which values a given model supports — so this pins the
+// safe-token shape only, never a value enum.
+#[test]
+fn provider_effort_accepts_every_currently_documented_value() {
+    for good in ["minimal", "low", "medium", "high", "xhigh", "max"] {
+        let text = config_with_claude_provider_lines(&format!("effort = \"{good}\"\n"));
+        assert!(
+            Config::load_str(&text).is_ok(),
+            "expected acceptance for effort {good:?}"
+        );
+    }
+}
+
+#[test]
+fn provider_effort_rejects_empty_unsafe_tokens_and_overlong_values() {
+    let overlong = "e".repeat(33);
+    for bad in [
+        "",
+        "high low",
+        "high\nlow",
+        "high;rm -rf /",
+        "-high",
+        "high=low",
+        overlong.as_str(),
+    ] {
+        let text = config_with_claude_provider_lines(&format!("effort = \"{bad}\"\n"));
+        let err = Config::load_str(&text).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ConfigInvalid, "effort {bad:?}");
+    }
+}
+
+#[test]
+fn codex_provider_table_validates_model_and_effort_too() {
+    let text = "config_version = 1\n\n[providers.claude]\nexecutable = \"claude\"\n\n[providers.codex]\nexecutable = \"codex\"\nmodel = \"\"\n";
+    let err = Config::load_str(text).unwrap_err();
+    assert_eq!(err.code, ErrorCode::ConfigInvalid);
+}
+
 const FORBIDDEN_KEYS: [&str; 8] = [
     "claude_args",
     "codex_args",

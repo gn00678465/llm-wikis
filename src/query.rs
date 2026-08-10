@@ -303,8 +303,10 @@ fn join_maybe_absolute(anchor: &Path, configured: &str) -> PathBuf {
 /// The implementation-owned provider safety/contract shape version (spec
 /// §15.1: "the implementation-owned provider safety/contract version").
 /// Bump this whenever `build_prompt`/`build_argv`'s wire shape changes in a
-/// way that should invalidate every existing probe record.
-pub const PROVIDER_CONTRACT_VERSION: &str = "1";
+/// way that should invalidate every existing probe record. `"2"`: issue #7
+/// added the optional `--model`/`--effort` (Claude) and
+/// `--model`/`model_reasoning_effort` (Codex) argv tail.
+pub const PROVIDER_CONTRACT_VERSION: &str = "2";
 
 /// The exact inputs spec §15.1 names for `compatibility_fingerprint`. Public
 /// so a test (or Task 11's doctor, when it publishes a record) can compute
@@ -323,6 +325,11 @@ pub struct CompatibilityFingerprintInput<'a> {
     pub skill_path: Option<&'a str>,
     pub plugin_dir: Option<&'a str>,
     pub executable_declaration: &'a str,
+    /// The rest of the `[providers.<agent>]` declaration (issue #7). Part of
+    /// the fingerprint for the same reason `query_prompt` is: a probe verified
+    /// against one model/effort does not vouch for another.
+    pub model_declaration: Option<&'a str>,
+    pub effort_declaration: Option<&'a str>,
     pub provider_contract_version: &'static str,
 }
 
@@ -472,21 +479,18 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
             Agent::Codex => wiki.codex.as_ref(),
         }
         .expect("Config::validate guarantees a provider table for every enabled agent");
-        let executable_value = match agent {
-            Agent::Claude => request
-                .config
-                .providers
-                .claude
-                .as_ref()
-                .and_then(|p| p.executable.clone()),
-            Agent::Codex => request
-                .config
-                .providers
-                .codex
-                .as_ref()
-                .and_then(|p| p.executable.clone()),
-        }
-        .unwrap_or_else(|| agent_command_name(agent).to_string());
+        // The whole `[providers.<agent>]` declaration, not just its
+        // `executable`: issue #7 added `model`/`effort` to the same table, and
+        // all three are read here so a third copy of this match never appears.
+        let provider_declaration = match agent {
+            Agent::Claude => request.config.providers.claude.as_ref(),
+            Agent::Codex => request.config.providers.codex.as_ref(),
+        };
+        let executable_value = provider_declaration
+            .and_then(|p| p.executable.clone())
+            .unwrap_or_else(|| agent_command_name(agent).to_string());
+        let model_value = provider_declaration.and_then(|p| p.model.clone());
+        let effort_value = provider_declaration.and_then(|p| p.effort.clone());
 
         let fail = |warnings: Vec<Warning>,
                     child_exit_code: Option<i32>,
@@ -674,6 +678,8 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
                     skill_path: provider_table.skill_path.as_deref(),
                     plugin_dir: provider_table.plugin_dir.as_deref(),
                     executable_declaration: &executable_value,
+                    model_declaration: model_value.as_deref(),
+                    effort_declaration: effort_value.as_deref(),
                     provider_contract_version: PROVIDER_CONTRACT_VERSION,
                 };
                 let current_compatibility_fingerprint =
@@ -752,6 +758,8 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
             query_prompt: wiki.query_prompt.clone(),
             question: question.clone(),
             plugin_dir,
+            model: model_value.clone(),
+            effort: effort_value.clone(),
             timeout: Duration::from_secs(request.config.runtime.timeout_seconds),
             max_stdout_bytes: request.config.runtime.max_stdout_bytes as usize,
             max_stderr_bytes: request.config.runtime.max_stderr_bytes as usize,
