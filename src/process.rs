@@ -82,6 +82,35 @@ fn default_pathext() -> Vec<String> {
     vec!["COM".into(), "EXE".into(), "BAT".into(), "CMD".into()]
 }
 
+/// Suffixes tried for a bare command name on Windows, in the order the process
+/// `PATHEXT` lists them, falling back to [`default_pathext`] when the variable
+/// is absent or contributes no usable entry. Entries are accepted with or
+/// without their leading dot, matching how the variable is written in practice.
+///
+/// Only suffixes [`run`] can actually hand to `CreateProcess` survive: a real
+/// `PATHEXT` routinely carries `.VBS`/`.JS`/`.MSC`, and PowerShell users add
+/// `.PS1` — all of which cmd.exe launches through a file association that
+/// direct, shell-free spawning does not have. Selecting one would reproduce the
+/// very os error 193 this ordering exists to avoid (an npm install drops
+/// `<name>.ps1` beside `<name>.cmd`), so the environment decides *order and
+/// membership within* the spawnable set, not the set itself.
+#[cfg(windows)]
+fn pathext_candidates(env: &dyn EnvLookup) -> Vec<String> {
+    let spawnable = default_pathext();
+    let configured: Vec<String> = env
+        .get("PATHEXT")
+        .unwrap_or_default()
+        .split(';')
+        .map(|ext| ext.trim().trim_start_matches('.').to_ascii_uppercase())
+        .filter(|ext| spawnable.iter().any(|s| s == ext))
+        .collect();
+    if configured.is_empty() {
+        spawnable
+    } else {
+        configured
+    }
+}
+
 fn classify_existing_file(path: &Path) -> Result<ResolvedExecutable, AppError> {
     let canonical = fs::canonicalize(path)
         .map_err(|e| cli_not_found(format!("provider executable {path:?} was not found: {e}")))?;
@@ -119,10 +148,16 @@ fn split_path_list(value: &str) -> Vec<String> {
 }
 
 /// Resolves a provider `executable` value (spec §10.1, plan Task 8 Step 2):
-/// bare names search `PATH` (Windows also tries each `PATHEXT` suffix); absolute
-/// paths are checked directly; relative paths containing a separator are
-/// rejected outright; missing files, directories, and non-regular entries all
-/// fail as `CLI_NOT_FOUND`.
+/// bare names search `PATH`; absolute paths are checked directly; relative paths
+/// containing a separator are rejected outright; missing files, directories, and
+/// non-regular entries all fail as `CLI_NOT_FOUND`.
+///
+/// On Windows a bare name follows `PATHEXT` semantics: every `PATHEXT` suffix is
+/// tried across the whole `PATH` first, and an extensionless file is only the
+/// last resort (issue #6). npm-installed provider CLIs drop an extensionless
+/// POSIX shim beside `<name>.cmd`; selecting the shim hands Windows a shell
+/// script to start as a Win32 image, which fails with os error 193. An
+/// explicitly configured absolute path is never re-resolved this way.
 pub fn resolve_executable(
     value: &str,
     env: &dyn EnvLookup,
@@ -142,24 +177,26 @@ pub fn resolve_executable(
     }
 
     let path_var = env.get("PATH").unwrap_or_default();
+    let dirs = split_path_list(&path_var);
+    // Search passes, in precedence order. Windows sweeps the entire `PATH` for
+    // `PATHEXT` candidates before falling back to the extensionless pass, so a
+    // POSIX shim early on `PATH` never shadows a real launcher later on it.
     #[cfg(windows)]
-    let extensions = {
-        let mut exts = vec![String::new()];
-        exts.extend(default_pathext());
-        exts
-    };
+    let passes = [pathext_candidates(env), vec![String::new()]];
     #[cfg(not(windows))]
-    let extensions = vec![String::new()];
+    let passes = [vec![String::new()]];
 
-    for dir in split_path_list(&path_var) {
-        for ext in &extensions {
-            let candidate = if ext.is_empty() {
-                Path::new(&dir).join(value)
-            } else {
-                Path::new(&dir).join(format!("{value}.{ext}"))
-            };
-            if candidate.is_file() {
-                return classify_existing_file(&candidate);
+    for extensions in &passes {
+        for dir in &dirs {
+            for ext in extensions {
+                let candidate = if ext.is_empty() {
+                    Path::new(dir).join(value)
+                } else {
+                    Path::new(dir).join(format!("{value}.{ext}"))
+                };
+                if candidate.is_file() {
+                    return classify_existing_file(&candidate);
+                }
             }
         }
     }
