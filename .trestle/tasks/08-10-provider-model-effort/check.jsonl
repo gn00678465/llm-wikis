@@ -1,0 +1,5 @@
+{"file":"tests/claude_adapter.rs","reason":"exact_argv(139) 未設定時逐位元不變的守門測試，新增帶 model/effort 版本"}
+{"file":"tests/codex_adapter.rs","reason":"exact_argv(154)/flag_order(189) 同上"}
+{"file":"tests/config_contract.rs","reason":"provider 欄位驗證錯誤碼與訊息的既有斷言風格"}
+{"file":"tests/probes.rs","reason":"compatibility fingerprint 計算與失效條件"}
+{"file":"tests/process_supervisor.rs","reason":"batch shim metacharacter 逐字送達測試的既有形狀，新增含雙引號 override value 的案例"}

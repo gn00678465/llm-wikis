@@ -1,0 +1,28 @@
+{
+  "round": 1,
+  "generated_by": "manual (trestle plugin gates.ts unavailable on this machine)",
+  "verdict": "PASS_WITH_ENVIRONMENT_EXCEPTION",
+  "gates": {
+    "G1": {"status": "pass", "note": "cargo build --all-targets --all-features"},
+    "G2": {"status": "pass", "note": "cargo fmt --all --check"},
+    "G3": {"status": "pass", "note": "cargo clippy --all-targets --all-features -- -D warnings"},
+    "G4": {"status": "pass_with_exception", "note": "cargo test --all-targets --all-features -- --test-threads=1: 414 passed / 0 failed with the two documented deadline-race tests skipped. Both fail identically on the clean base commit d2ad525 with none of this task's changes applied (verified this session), and process_supervisor took 846s vs ~10s earlier the same session — environmental process-enumeration latency, not a regression. See evidence/round-1.md."},
+    "G5": {"status": "pass", "note": "config_contract 94 passed"},
+    "G6": {"status": "pass", "note": "claude_adapter 25 passed"},
+    "G7": {"status": "pass", "note": "codex_adapter 24 passed"},
+    "G8": {"status": "pass", "note": "probes 19 passed"},
+    "G9": {"status": "pass", "note": "spec_drift 3 passed"},
+    "G10": {"status": "pass"},
+    "G11": {"status": "pass"},
+    "G12": {"status": "pass"},
+    "G13": {"status": "pass"},
+    "G14": {"status": "pass"},
+    "G15": {"status": "pass"},
+    "G16": {"status": "pass"},
+    "G17": {"status": "pass"},
+    "G18": {"status": "pass"},
+    "G19": {"status": "pass"},
+    "G20": {"status": "pass", "note": "git diff d2ad525 -- tests/claude_adapter.rs tests/codex_adapter.rs removes no expected-vector line; only build_argv call sites gained ', None, None'."},
+    "G21": {"status": "pass", "note": "probe_request call sites unchanged in both adapters; both still pass an explicit literal args vector, never build_argv."}
+  }
+}

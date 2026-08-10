@@ -1,0 +1,5 @@
+{"file":"src/config.rs","reason":"ProviderConfig(233) 新欄位、Config::validate(392) struct pattern 需改寫、validate_executable(499) 驗證風格範本、INIT_TEMPLATE(1046)"}
+{"file":"src/providers/claude.rs","reason":"build_argv(109) 加 model/effort、probe_request(250) 不得帶、invoke(359) 呼叫端"}
+{"file":"src/providers/codex.rs","reason":"build_argv(53) 加 --model 與 -c model_reasoning_effort、-c value 的 TOML 解析語意(37-52)"}
+{"file":"src/query.rs","reason":"ProviderRequest 建構點(746)、CompatibilityFingerprintInput(314)、PROVIDER_CONTRACT_VERSION(307)"}
+{"file":"src/doctor.rs","reason":"fingerprint 建構點(574)、executable_value_for(277)、--live 重用 QueryService"}
