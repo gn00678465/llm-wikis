@@ -102,6 +102,26 @@ skill_path = ".agents/skills/wiki-query/SKILL.md"
 See [`config.example.toml`](config.example.toml) for a fuller worked example
 and [`docs/llm-wikis.md`](docs/llm-wikis.md) for every field's meaning.
 
+Each `[providers.*]` table also takes an optional `model` and `effort`:
+
+```toml
+[providers.claude]
+executable = "claude"
+model      = "opus"
+effort     = "high"
+
+[providers.codex]
+executable = "codex"
+model      = "gpt-5.6-sol"
+effort     = "high"
+```
+
+Both are optional and, when unset, nothing extra reaches the provider — it
+keeps choosing for itself. They apply to `query` and `doctor --live` only,
+never to the version or authentication probes. Whether a given model accepts
+a given effort is the provider's own question; an unsupported combination
+comes back as an ordinary provider failure.
+
 ## Usage
 
 ```sh
