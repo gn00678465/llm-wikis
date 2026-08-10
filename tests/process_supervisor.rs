@@ -641,6 +641,32 @@ fn batch_shim_boundary() {
     }
 }
 
+// Issue #7: the Codex effort override is the first argv element this wrapper
+// sends whose *value* contains double quotes
+// (`model_reasoning_effort="high"`). Quotes are the one metacharacter class
+// `spaces_and_metachars` above does not cover, and they are precisely what
+// Windows' argv encoding uses as its own delimiter — so this proves the
+// override survives the `.cmd` shim path intact rather than assuming it does
+// from the argv unit tests, which never spawn anything.
+#[cfg(windows)]
+#[test]
+fn batch_shim_preserves_quoted_config_override_argument() {
+    let dir = tempfile::Builder::new()
+        .prefix("quote test ")
+        .tempdir()
+        .unwrap();
+    let override_arg = r#"model_reasoning_effort="high""#;
+    let lines = run_shim(dir.path(), 2, &["-c", override_arg], b"");
+
+    assert_eq!(lines[0], "ARG0=[-c]");
+    assert_eq!(lines[1], format!("ARG1=[{override_arg}]"));
+    assert_eq!(
+        lines.len(),
+        3,
+        "expected exactly two forwarded args + STDIN_LEN, got {lines:?}"
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn spaces_and_metachars() {

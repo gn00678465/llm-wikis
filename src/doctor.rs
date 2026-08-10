@@ -571,6 +571,10 @@ fn publish_probe(
     let skill_dir = skill_fingerprint_dir(config_dir, &context.project_root, provider)?;
     let skill_fingerprint = compute_skill_fingerprint(&skill_dir)?;
     let executable_declaration = executable_value_for(config, agent);
+    let provider_declaration = match agent {
+        Agent::Claude => config.providers.claude.as_ref(),
+        Agent::Codex => config.providers.codex.as_ref(),
+    };
     let compat_input = CompatibilityFingerprintInput {
         wiki_id,
         title: &wiki.title,
@@ -583,6 +587,8 @@ fn publish_probe(
         skill_path: provider.skill_path.as_deref(),
         plugin_dir: provider.plugin_dir.as_deref(),
         executable_declaration: &executable_declaration,
+        model_declaration: provider_declaration.and_then(|p| p.model.as_deref()),
+        effort_declaration: provider_declaration.and_then(|p| p.effort.as_deref()),
         provider_contract_version: PROVIDER_CONTRACT_VERSION,
     };
     let compatibility_fingerprint = compute_compatibility_fingerprint(&compat_input);

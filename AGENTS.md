@@ -44,6 +44,23 @@ task status manually — statuses and next steps are all defined there.
 - In the Bash tool environment on this machine, `cargo` can resolve to a
   broken chocolatey shim; if cargo commands fail oddly, check `which cargo`
   / correct PATH (or use PowerShell) before debugging the build itself.
+- The Codex adapter spawns with `--ignore-user-config`, so llm-wikis'
+  registry is the ONLY channel that can influence Codex behavior — any new
+  setting (model, reasoning effort, future config keys) has to be turned into
+  explicit invocation argv; never assume the operator can set it in their own
+  Codex config. Related: an argv value containing double quotes
+  (`-c model_reasoning_effort="high"`) is now proven to survive the Windows
+  `.cmd` shim path verbatim
+  (`tests/process_supervisor.rs`, test
+  `batch_shim_preserves_quoted_config_override_argument`);
+  the older metacharacter tests cover `& | ^ %VAR% !DELAYED!` but not quotes,
+  which are Windows argv encoding's own delimiter.
+- When the two `tests/process_supervisor.rs` deadline-race tests fail AND that
+  file changed (so the rule above cannot clear them on its own), decide it by
+  measurement, not inference: `git stash`, run just those two tests on the base
+  commit, compare. Confirmed on 2026-08-10 that the same binary went from ~10s
+  green to ~846s with both tests failing inside one session, purely from host
+  process-enumeration latency.
 - On clap-derived items in src/cli.rs, `///` doc comments BECOME the
   user-facing `--help` text. Rationale, spec citations, and task/decision
   references go in `//` comments; keep `///` to a short imperative

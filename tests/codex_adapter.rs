@@ -155,7 +155,7 @@ fn invalid_native_output_exit() {
 fn exact_argv() {
     let project_root = Path::new("D:/Wikis/agents");
     let schema_path = Path::new("D:/Temp/llm-wikis-xyz/output-schema.json");
-    let args = build_argv(project_root, schema_path);
+    let args = build_argv(project_root, schema_path, None, None);
     let expected: Vec<OsString> = vec![
         OsString::from("--ask-for-approval"),
         OsString::from("never"),
@@ -186,11 +186,86 @@ fn exact_argv() {
     assert_eq!(args, expected);
 }
 
+// Issue #7. Codex has no dedicated reasoning-effort flag, so effort travels as
+// the documented `model_reasoning_effort` config override on the same `-c`
+// mechanism the adapter already uses; `--model` is a real flag. Both sit after
+// `exec`, and `exact_argv` above is the other half of this pair — it proves an
+// operator who configures neither still gets the byte-identical argv.
+#[test]
+fn exact_argv_with_model_and_effort() {
+    let project_root = Path::new("D:/Wikis/agents");
+    let schema_path = Path::new("D:/Temp/llm-wikis-xyz/output-schema.json");
+    let args = build_argv(project_root, schema_path, Some("gpt-5.6-sol"), Some("high"));
+
+    let model_pos = args.iter().position(|a| a == "--model").unwrap();
+    assert_eq!(args[model_pos + 1], OsString::from("gpt-5.6-sol"));
+
+    let effort_value = OsString::from(r#"model_reasoning_effort="high""#);
+    let effort_pos = args.iter().position(|a| *a == effort_value).unwrap();
+    assert_eq!(args[effort_pos - 1], OsString::from("-c"));
+
+    // Both land after `exec` (a Codex subcommand option, not a top-level one)
+    // and before the output/stdin tail that must stay last.
+    let exec_pos = args.iter().position(|a| a == "exec").unwrap();
+    let stdin_pos = args.iter().position(|a| a == "-").unwrap();
+    assert!(exec_pos < model_pos && model_pos < stdin_pos);
+    assert!(exec_pos < effort_pos && effort_pos < stdin_pos);
+
+    // The whole override is one argv element: the effort never becomes its own
+    // token that a downstream parser could read as a separate argument.
+    assert!(!args.iter().any(|a| a == "high"));
+}
+
+#[test]
+fn model_and_effort_are_independently_optional() {
+    let project_root = Path::new("D:/Wikis/agents");
+    let schema_path = Path::new("D:/Temp/llm-wikis-xyz/output-schema.json");
+    let baseline = build_argv(project_root, schema_path, None, None);
+
+    let model_only = build_argv(project_root, schema_path, Some("gpt-5.6-sol"), None);
+    assert_eq!(model_only.len(), baseline.len() + 2);
+    assert!(
+        !model_only
+            .iter()
+            .any(|a| { a.to_string_lossy().starts_with("model_reasoning_effort=") })
+    );
+
+    let effort_only = build_argv(project_root, schema_path, None, Some("high"));
+    assert_eq!(effort_only.len(), baseline.len() + 2);
+    assert!(!effort_only.iter().any(|a| a == "--model"));
+}
+
+// Same contract as the Claude adapter's: the bounded version/auth probes build
+// their own fixed argv and must never grow model/effort.
+#[test]
+fn probe_argv_never_carries_model_or_effort() {
+    let runner = FakeProcessRunner::new();
+    runner.push_response(Ok(completed_outcome(b"codex-cli 0.147.0", b"", 0)));
+    runner.push_response(Ok(completed_outcome(b"Logged in using ChatGPT", b"", 0)));
+    let exe = ResolvedExecutable {
+        path: PathBuf::from("D:/tools/codex.exe"),
+        kind: ExecutableKind::Native,
+    };
+    let adapter = CodexAdapter;
+    adapter.version(&runner, &exe).expect("version probe");
+    adapter.auth_status(&runner, &exe).expect("auth probe");
+
+    for captured in runner.captured_requests() {
+        assert!(
+            !captured.args.iter().any(|a| {
+                a == "--model" || a.to_string_lossy().contains("model_reasoning_effort")
+            }),
+            "probe argv must stay free of model/effort: {:?}",
+            captured.args
+        );
+    }
+}
+
 #[test]
 fn flag_order() {
     let project_root = Path::new("D:/Wikis/agents");
     let schema_path = Path::new("D:/Temp/llm-wikis-xyz/output-schema.json");
-    let args = build_argv(project_root, schema_path);
+    let args = build_argv(project_root, schema_path, None, None);
     let approval_pos = args.iter().position(|a| a == "--ask-for-approval").unwrap();
     let exec_pos = args.iter().position(|a| a == "exec").unwrap();
     assert!(
@@ -203,7 +278,7 @@ fn flag_order() {
 fn no_add_dir() {
     let project_root = Path::new("D:/Wikis/agents");
     let schema_path = Path::new("D:/Temp/llm-wikis-xyz/output-schema.json");
-    let args = build_argv(project_root, schema_path);
+    let args = build_argv(project_root, schema_path, None, None);
     assert!(!args.iter().any(|a| a == "--add-dir"));
 }
 
@@ -211,7 +286,7 @@ fn no_add_dir() {
 fn sandbox_flag() {
     let project_root = Path::new("D:/Wikis/agents");
     let schema_path = Path::new("D:/Temp/llm-wikis-xyz/output-schema.json");
-    let args = build_argv(project_root, schema_path);
+    let args = build_argv(project_root, schema_path, None, None);
     let pos = args.iter().position(|a| a == "--sandbox").unwrap();
     assert_eq!(args[pos + 1], OsString::from("read-only"));
 }
@@ -220,7 +295,7 @@ fn sandbox_flag() {
 fn no_session_persistence() {
     let project_root = Path::new("D:/Wikis/agents");
     let schema_path = Path::new("D:/Temp/llm-wikis-xyz/output-schema.json");
-    let args = build_argv(project_root, schema_path);
+    let args = build_argv(project_root, schema_path, None, None);
     assert!(args.iter().any(|a| a == "--ephemeral"));
 }
 
@@ -228,7 +303,7 @@ fn no_session_persistence() {
 fn capability_exclusion() {
     let project_root = Path::new("D:/Wikis/agents");
     let schema_path = Path::new("D:/Temp/llm-wikis-xyz/output-schema.json");
-    let args = build_argv(project_root, schema_path);
+    let args = build_argv(project_root, schema_path, None, None);
     // MCP exclusion is explicit (spec §10.1 R-25): both the zeroed table and
     // the two built-in-server disable flags must be present.
     assert!(
@@ -270,7 +345,7 @@ fn capability_exclusion() {
 fn no_prompt_in_argv() {
     let project_root = Path::new("D:/Wikis/agents");
     let schema_path = Path::new("D:/Temp/llm-wikis-xyz/output-schema.json");
-    let args = build_argv(project_root, schema_path);
+    let args = build_argv(project_root, schema_path, None, None);
     let joined: Vec<String> = args
         .iter()
         .map(|a| a.to_string_lossy().to_string())
@@ -325,6 +400,8 @@ fn provider_request(executable: ResolvedExecutable) -> ProviderRequest {
         query_prompt: "Use the wiki-query skill to answer from this wiki.".to_string(),
         question: "What does this wiki cover?".to_string(),
         plugin_dir: None,
+        model: None,
+        effort: None,
         timeout: Duration::from_secs(30),
         max_stdout_bytes: 1_048_576,
         max_stderr_bytes: 65_536,

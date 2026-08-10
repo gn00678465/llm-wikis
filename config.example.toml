@@ -26,9 +26,23 @@ default_agent = "claude"
 
 [providers.claude]
 executable = "claude"
+# `model` and `effort` are optional. Unset means the provider CLI keeps
+# choosing for itself and nothing extra is added to its argv. Set them to
+# pin one knowledge base's cost/speed/quality profile:
+#   model  = "opus"
+#   effort = "high"        # claude --effort: low, medium, high, xhigh, max
+# Both apply to `query` and `doctor --live` only — never to the version or
+# authentication probes — and changing either invalidates a published
+# `doctor --live` probe, exactly as changing `query_prompt` does.
 
 [providers.codex]
 executable = "codex"
+#   model  = "gpt-5.6-sol"
+#   effort = "high"        # codex model_reasoning_effort: minimal, low,
+#                          # medium, high, xhigh
+# Which levels a given model accepts is the provider's own question: an
+# unsupported one comes back as an ordinary provider failure, not a
+# configuration error.
 
 [runtime]
 timeout_seconds    = 180

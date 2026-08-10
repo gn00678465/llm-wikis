@@ -335,6 +335,63 @@ anywhere. So `executable = "codex"` selects `codex.cmd` even when an npm
 install has dropped an extensionless POSIX shim beside it — naming the `.cmd`
 explicitly is supported but not required.
 
+#### Model and reasoning effort
+
+Each provider table also takes an optional `model` and `effort`:
+
+```toml
+[providers.claude]
+executable = "claude"
+model      = "opus"
+effort     = "high"
+
+[providers.codex]
+executable = "codex"
+model      = "gpt-5.6-sol"
+effort     = "high"
+```
+
+Both are optional. Unset, nothing extra is added to the provider's argv and
+the provider CLI keeps choosing for itself — the behavior every earlier
+version had. Set, they become separate argument values on the invocation:
+`--model` plus `--effort` for Claude, and `--model` plus the
+`model_reasoning_effort` config override for Codex, which has no dedicated
+effort flag. Codex is invoked with `--ignore-user-config`, so a model or
+effort set in your own Codex configuration is deliberately not read; this
+registry is the only channel that reaches it.
+
+Where they apply:
+
+| Surface | Applies |
+|---|---|
+| `query` | yes |
+| `doctor --live` | yes |
+| version probe / authentication probe | no |
+| `doctor` (static) | no |
+| `list` | no |
+
+Static `doctor` validates only that the values are well-formed. It cannot
+tell you whether the provider actually offers that model, or whether that
+model supports that effort level — only `doctor --live` or a real `query`
+answers that, and an unsupported combination surfaces as an ordinary
+provider failure rather than a configuration error.
+
+Effort levels currently documented by each provider — a snapshot, not a
+closed set this tool enforces:
+
+- Claude: `low`, `medium`, `high`, `xhigh`, `max`
+- Codex: `minimal`, `low`, `medium`, `high`, `xhigh`
+
+A `model` is one alias or fully qualified model ID: non-empty, at most 128
+bytes, no control characters, no whitespace, and not starting with `-`. An
+`effort` is one short token of letters, digits, `_`, and `-`, at most 32
+bytes, starting with a letter or digit. Anything else fails at configuration
+load with `CONFIG_INVALID`.
+
+Changing `model` or `effort` invalidates a published `doctor --live` probe,
+exactly as changing `query_prompt` does: a verification run against one model
+does not vouch for another. Re-run `doctor --live` after changing either.
+
 ### 2.7 Project skills and Claude local plugins
 
 Two load modes exist per provider:

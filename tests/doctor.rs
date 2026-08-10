@@ -150,6 +150,8 @@ fn build_config(fixture: &Fixture, agents: Vec<Agent>) -> Config {
         };
         let provider_cfg = Some(ProviderConfig {
             executable: Some(fixture.executable_path.display().to_string()),
+            model: None,
+            effort: None,
         });
         match agent {
             Agent::Claude => {
@@ -291,6 +293,8 @@ fn build_local_plugin_config(fixture: &Fixture, agent: Agent, reject: bool) -> C
     wikis.insert(WIKI_ID.to_string(), wiki);
     let provider_cfg = Some(ProviderConfig {
         executable: Some(fixture.executable_path.display().to_string()),
+        model: None,
+        effort: None,
     });
     let mut providers = ProvidersConfig {
         claude: None,
@@ -1200,6 +1204,8 @@ fn live_step6_invalidation_on_executable_version_fingerprint_or_query_prompt_cha
             skill_path: Some(SKILL_RELATIVE),
             plugin_dir: None,
             executable_declaration: &executable_str,
+            model_declaration: None,
+            effort_declaration: None,
             provider_contract_version: llm_wikis::query::PROVIDER_CONTRACT_VERSION,
         };
     let compat_input_before = build_compat_input(QUERY_PROMPT);
@@ -1253,6 +1259,8 @@ fn plain_query_service_never_calls_doctor_publish() {
         skill_path: provider.skill_path.as_deref(),
         plugin_dir: provider.plugin_dir.as_deref(),
         executable_declaration: &fixture.executable_path.display().to_string(),
+        model_declaration: None,
+        effort_declaration: None,
         provider_contract_version: llm_wikis::query::PROVIDER_CONTRACT_VERSION,
     };
     let compatibility_fingerprint =
