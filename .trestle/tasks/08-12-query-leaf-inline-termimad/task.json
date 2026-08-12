@@ -1,0 +1,23 @@
+{
+  "id": "08-12-query-leaf-inline-termimad",
+  "title": "query 終端渲染改用 leaf --inline 取代內建 termimad",
+  "status": "in_progress",
+  "complexity": "complex",
+  "created": "2026-08-11T22:18:59.806Z",
+  "developer": "Madao",
+  "rounds": {
+    "evaluate": 1,
+    "rollback": 0,
+    "baseline": [
+      ".trestle/tasks/08-12-query-leaf-inline-termimad/check.jsonl",
+      ".trestle/tasks/08-12-query-leaf-inline-termimad/checklist.md",
+      ".trestle/tasks/08-12-query-leaf-inline-termimad/design.md",
+      ".trestle/tasks/08-12-query-leaf-inline-termimad/implement.jsonl",
+      ".trestle/tasks/08-12-query-leaf-inline-termimad/implement.md",
+      ".trestle/tasks/08-12-query-leaf-inline-termimad/prd.md",
+      ".trestle/tasks/08-12-query-leaf-inline-termimad/research/leaf-inline.md",
+      ".trestle/tasks/08-12-query-leaf-inline-termimad/task.json"
+    ]
+  },
+  "deferrals": []
+}
