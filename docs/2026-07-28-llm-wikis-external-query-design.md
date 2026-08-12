@@ -828,7 +828,7 @@ Failure:
 
 Argument failures before wiki or agent resolution use `null` for the unresolved fields.
 
-Public `warnings` is an array of closed objects with `source`, `code`, and `message`. Wrapper warning codes are `WIKI_SCHEMA_ABSENT`, `CLAUDE_READ_SCOPE_BROAD`, `CODEX_READ_SCOPE_BROAD`, and `CLAUDE_ENABLED_PLUGINS_DECLARED`. Each model-supplied warning string is normalized to `{ "source": "provider", "code": "PROVIDER_WARNING", "message": <string> }`. Wrapper warnings appear first in deterministic generation order, followed by provider warnings in model order.
+Public `warnings` is an array of closed objects with `source`, `code`, and `message`. Wrapper warning codes are `WIKI_SCHEMA_ABSENT`, `CLAUDE_READ_SCOPE_BROAD`, `CODEX_READ_SCOPE_BROAD`, `CLAUDE_ENABLED_PLUGINS_DECLARED`, and `VIEWER_UNAVAILABLE`. Each model-supplied warning string is normalized to `{ "source": "provider", "code": "PROVIDER_WARNING", "message": <string> }`. Wrapper warnings appear first in deterministic generation order, followed by provider warnings in model order.
 
 `raw_format` is exactly `claude-json` after a parsed Claude native envelope, `codex-jsonl` after parsed Codex events, or `null` when no native format was successfully established.
 
@@ -928,7 +928,7 @@ Static checks:
 - provider authentication status, read through each provider's non-billable status surface (§10.1), under check name `auth`;
 - platform sandbox warning.
 
-Doctor `checks[].name` is one of `config`, `roots`, `wiki_structure`, `entrypoint`, `executable`, `auth`, `read_scope`, `live_contract`, or `mutation`. `checks[].code` is `null` for pass, a stable warning code for warn, or one error code from Section 14 for fail.
+Doctor `checks[].name` is one of `config`, `roots`, `wiki_structure`, `entrypoint`, `executable`, `auth`, `read_scope`, `live_contract`, `mutation`, or `viewer`. `checks[].code` is `null` for pass, a stable warning code for warn, or one error code from Section 14 for fail.
 
 `CODEX_READ_SCOPE_BROAD` and the conditional `CLAUDE_READ_SCOPE_BROAD` use check name `read_scope`.
 
