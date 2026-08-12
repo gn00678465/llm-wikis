@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::config::{
-    Config, ProviderWikiConfig, WikiConfig, resolve_and_check_artifact, resolve_wiki_roots,
-    validate_entrypoint,
+    Config, ProviderWikiConfig, ViewerBackend, WikiConfig, resolve_and_check_artifact,
+    resolve_wiki_roots, validate_entrypoint,
 };
 use crate::error::{AppError, ErrorCode, ErrorDetails};
 use crate::output::{Agent, SCHEMA_VERSION};
@@ -118,6 +118,7 @@ const CHECK_AUTH: &str = "auth";
 const CHECK_READ_SCOPE: &str = "read_scope";
 const CHECK_LIVE_CONTRACT: &str = "live_contract";
 const CHECK_MUTATION: &str = "mutation";
+const CHECK_VIEWER: &str = "viewer";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -733,6 +734,56 @@ fn run_live_check<R: ProcessRunner>(
     }
 }
 
+/// The `viewer` check (issue #8; task 08-12 design.md §3). Unlike every other
+/// check here this one is a property of the installation, not of a
+/// (wiki, agent) pair, so it is computed **once per doctor run** and the same
+/// result is cloned into each pair's `checks` — probing once per pair would
+/// spawn the viewer N times to learn the same fact.
+///
+/// A missing viewer is `warn`, never `fail`. Compare the `executable` check:
+/// without a provider CLI there is no answer at all, but without a viewer the
+/// answer is complete and correct and only its presentation degrades to raw
+/// markdown. Failing here would push `doctor` to a non-zero exit
+/// (`dominant_exit`) and break every script that gates on it, over a purely
+/// cosmetic component.
+fn viewer_check(config: &Config) -> DoctorCheck {
+    if config.viewer.backend == ViewerBackend::Plain {
+        return DoctorCheck::pass(
+            CHECK_VIEWER,
+            "Viewer backend is \"plain\": answers print as raw markdown and no external viewer is needed.",
+        );
+    }
+    let unavailable = |detail: String| {
+        DoctorCheck::warn(
+            CHECK_VIEWER,
+            crate::output::WrapperWarningCode::ViewerUnavailable.as_str(),
+            format!("{detail} Answers will print as raw markdown until this is resolved."),
+        )
+    };
+    let viewer = match crate::viewer::Viewer::resolve(&config.viewer, &crate::config::ProcessEnv) {
+        Ok(v) => v,
+        Err(e) => return unavailable(format!("Markdown viewer not found: {}.", e.message)),
+    };
+    match viewer.probe() {
+        Ok(()) => DoctorCheck::pass(
+            CHECK_VIEWER,
+            format!(
+                "Markdown viewer at {} renders inline output.",
+                viewer.path().display()
+            ),
+        ),
+        // The probe renders a document rather than asking for a version
+        // string on purpose: `--inline` only exists in newer viewer releases,
+        // and an older binary answers `--version` happily before failing at
+        // the first real query.
+        Err(e) => unavailable(format!(
+            "Markdown viewer at {} cannot render inline output: {}.",
+            viewer.path().display(),
+            e.message
+        )),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Top-level doctor entry point
 // ---------------------------------------------------------------------------
@@ -754,14 +805,18 @@ pub fn run_doctor<R: ProcessRunner>(
 
     let mut results: Vec<DoctorPairResult> = Vec::new();
     let mut live_context: Option<StaticContext> = None;
+    // Once per run, before the pair loop — see `viewer_check`'s doc comment.
+    let viewer = viewer_check(&request.config);
     for (wiki_id, agent) in &pairs {
-        let (checks, context) = run_static_checks(
+        let (mut checks, context) = run_static_checks(
             &request.config,
             &request.config_dir,
             wiki_id,
             *agent,
             &runner,
         );
+        // Appended last so the nine pre-existing checks keep their positions.
+        checks.push(viewer.clone());
         if request.live {
             live_context = context;
         }

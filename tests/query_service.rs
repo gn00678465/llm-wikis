@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use llm_wikis::config::{
     Config, LoadMode, ProviderConfig, ProviderWikiConfig, ProvidersConfig, RuntimeConfig,
-    WikiConfig,
+    ViewerBackend, ViewerConfig, WikiConfig,
 };
 use llm_wikis::error::{AppError, ErrorCode};
 use llm_wikis::output::Agent;
@@ -159,6 +159,12 @@ fn build_config(fixture: &Fixture, agent: Agent) -> Config {
         default_agent: Some(agent),
         providers,
         runtime: RuntimeConfig::default(),
+        // Explicitly plain: these fixtures must not reach out to a real
+        // viewer binary on the host running the tests.
+        viewer: ViewerConfig {
+            backend: ViewerBackend::Plain,
+            executable: None,
+        },
         wikis,
     }
 }

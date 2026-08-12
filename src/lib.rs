@@ -10,4 +10,5 @@ pub mod process;
 pub mod providers;
 pub mod query;
 pub mod snapshot;
+pub mod viewer;
 pub mod wiki;
