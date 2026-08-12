@@ -561,6 +561,57 @@ answer's markdown with terminal styling (headings, bold, lists, ...).
 color) force it automatically, so an agent invoking this CLI through a pipe
 already gets raw markdown without needing `--plain` at all.
 
+#### The `[viewer]` section
+
+Rendering is done by [leaf](https://github.com/RivoLink/leaf), an external
+viewer that is **not bundled and never installed for you**:
+
+```toml
+[viewer]
+backend = "leaf"
+# executable = 'C:\Tools\leaf\leaf.exe'
+```
+
+- `backend = "leaf"` (the default) renders through `leaf --inline`.
+- `backend = "plain"` prints the model's markdown exactly as received. Nothing
+  needs to be installed for this.
+- `executable` is optional and only for a custom install location, a wrapper
+  script, or a machine with several versions. Omitted, the bare command `leaf`
+  is resolved on `PATH` — on Windows through `PATHEXT`, so `leaf.exe` is found
+  without naming the extension.
+
+leaf 1.21.0 or newer is required: `--inline` did not exist before it.
+
+**When the viewer runs at all.** Only for an interactive terminal. These all
+print raw markdown and never start it:
+
+| Situation | Viewer |
+|---|---|
+| stdout piped or redirected to a file | not started |
+| `--json` | not started |
+| `--plain` | not started |
+| `NO_COLOR` set to any value | not started |
+| `backend = "plain"` | not started |
+
+Redirected output therefore contains no ANSI escape sequences, and piped
+output stays exactly as machine-readable as it was before.
+
+**When the viewer fails.** The answer is never lost and the query is never
+re-run. llm-wikis collects the viewer's complete output before writing
+anything, so stdout receives either the rendered answer or the raw markdown —
+never a half-rendered answer followed by a second copy. A one-line warning
+goes to stderr, leaving stdout clean. This covers a missing binary, a viewer
+that cannot start, a non-zero exit, and a version too old for `--inline`.
+
+**Checking it.** `llm-wikis doctor` reports a `viewer` check. A missing or
+unusable viewer is a **warning**, not a failure, and doctor's exit code stays
+0 — losing formatting is not the same as losing answers. The check runs once
+per invocation and is reported under every wiki/agent pair.
+
+leaf reads its own user configuration and theme, and offers no flag to ignore
+them, so colors may differ between machines. llm-wikis deliberately does not
+override that: your leaf configuration is yours.
+
 ### 3.3 JSON envelopes and exit classes
 
 `--json` emits **exactly one** JSON document on stdout per invocation

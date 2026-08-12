@@ -76,6 +76,17 @@ answer with citations via the output contract.
   docs/llm-wikis.md §1.2, Cargo.toml `[profile.release]`).
 - Tests run single-threaded in CI (`--test-threads=1`) (Source:
   .github/workflows/ci.yml).
+- Terminal markdown rendering is an **external binary** (`leaf --inline`),
+  not an in-process crate — the first time this project spawns a subprocess
+  for presentation rather than for provider execution. This deliberately
+  reverses task 08-06/08-08's research conclusion, which rejected exactly this
+  route on the grounds that it turns a display feature into an install
+  requirement; the operator chose it on 2026-08-12 with that objection stated.
+  Both the decision and the objection are recorded here so a future reader who
+  finds only the 08-08 research does not mistake this for an oversight. The
+  viewer is optional at runtime: a missing one degrades to raw markdown with a
+  stderr warning, and doctor reports it as `warn`, never `fail` (Source:
+  .trestle/tasks/archive 08-12 prd.md D1/D2/D5, src/viewer.rs).
 - Claude's `--tools` surface must stay `Read,Grep,Glob` — do NOT add
   `Skill`: live-verified (claude 2.1.223, twice) that its presence makes the
   model call the Skill tool instead of relying on CLI-side `/wiki-query`
@@ -96,17 +107,20 @@ answer with citations via the output contract.
   stdout only; human-readable error lines and the query spinner on stderr;
   `--json` always exactly one JSON document on stdout even on failure.
   (Same task, D2/D3; docs/llm-wikis.md §3.)
-- Terminal presentation stays in the CLI routing layer: markdown→ANSI
-  rendering (`termimad`) and interactive prompts (`dialoguer`) live in
-  `cli.rs` (`emit_query` / `run_config_init`), gated on
-  `std::io::IsTerminal` so non-TTY runs never even construct the
-  interactive objects (extends the `start_query_spinner` precedent);
-  `output.rs::render_human` stays a pure formatter — its doc comment
-  assigns stream-routing to cli.rs. Dependency choices: `dialoguer` over
-  `inquire` to reuse the console-rs family already in-tree via
-  `indicatif`; `termimad` accepted knowing it adds `crossterm` as a
-  second terminal backend. (Task 08-08, D3/D4, research/markdown-rendering.md,
+- Terminal presentation stays in the CLI routing layer: the markdown render
+  call and interactive prompts (`dialoguer`) live in `cli.rs` (`emit_query` /
+  `run_config_init`), gated on `std::io::IsTerminal` so non-TTY runs never
+  even construct the interactive objects (extends the `start_query_spinner`
+  precedent); `output.rs::render_human` stays a pure formatter — its doc
+  comment assigns stream-routing to cli.rs. Dependency choice: `dialoguer`
+  over `inquire` to reuse the console-rs family already in-tree via
+  `indicatif`. (Task 08-08, D3/D4, research/markdown-rendering.md,
   research/init-interactive.md.)
+  **Superseded in part by task 08-12**: markdown rendering is no longer an
+  in-process crate. `termimad` and its `crossterm` backend were removed and
+  the render call now spawns `leaf --inline` through `src/viewer.rs`; only
+  `console` (already in-tree via `indicatif`) remains, supplying the terminal
+  width. The `IsTerminal` gating and the pure-formatter split are unchanged.
 - `skills/llm-wikis-usage/` ships an agent-facing usage skill in-repo,
   frontmatter restricted to `name`+`description` — the cross-tool subset
   Claude Code and Codex both accept; a Claude plugin/marketplace layout

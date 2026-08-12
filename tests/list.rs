@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 
 use llm_wikis::config::{
-    Config, LoadMode, ProviderWikiConfig, ProvidersConfig, RuntimeConfig, WikiConfig,
+    Config, LoadMode, ProviderWikiConfig, ProvidersConfig, RuntimeConfig, ViewerBackend,
+    ViewerConfig, WikiConfig,
 };
 use llm_wikis::doctor::{list_error_envelope, run_list};
 use llm_wikis::error::{AppError, ErrorCode};
@@ -16,6 +17,10 @@ fn empty_config(default_agent: Option<Agent>) -> Config {
         default_agent,
         providers: ProvidersConfig::default(),
         runtime: RuntimeConfig::default(),
+        viewer: ViewerConfig {
+            backend: ViewerBackend::Plain,
+            executable: None,
+        },
         wikis: BTreeMap::new(),
     }
 }

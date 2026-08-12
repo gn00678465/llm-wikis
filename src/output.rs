@@ -11,7 +11,7 @@ pub const SCHEMA_VERSION: &str = "1.0";
 
 /// Doctor `checks[].name` vocabulary (spec §15). Defined here for later tasks
 /// (doctor implementation) and consumed today only by the spec-drift test.
-pub const DOCTOR_CHECK_NAMES: [&str; 9] = [
+pub const DOCTOR_CHECK_NAMES: [&str; 10] = [
     "config",
     "roots",
     "wiki_structure",
@@ -21,6 +21,10 @@ pub const DOCTOR_CHECK_NAMES: [&str; 9] = [
     "read_scope",
     "live_contract",
     "mutation",
+    // Appended last, and emitted last within every pair's `checks`, so the
+    // nine pre-existing entries keep their positions for consumers that index
+    // rather than search (issue #8; task 08-12 design.md §3).
+    "viewer",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,14 +70,19 @@ pub enum WrapperWarningCode {
     ClaudeReadScopeBroad,
     CodexReadScopeBroad,
     ClaudeEnabledPluginsDeclared,
+    /// The configured terminal markdown viewer cannot render (issue #8). A
+    /// warning rather than an error on purpose: the answer itself is complete
+    /// and correct, only its presentation degrades to raw markdown.
+    ViewerUnavailable,
 }
 
 impl WrapperWarningCode {
-    pub const ALL: [WrapperWarningCode; 4] = [
+    pub const ALL: [WrapperWarningCode; 5] = [
         WrapperWarningCode::WikiSchemaAbsent,
         WrapperWarningCode::ClaudeReadScopeBroad,
         WrapperWarningCode::CodexReadScopeBroad,
         WrapperWarningCode::ClaudeEnabledPluginsDeclared,
+        WrapperWarningCode::ViewerUnavailable,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -82,6 +91,7 @@ impl WrapperWarningCode {
             WrapperWarningCode::ClaudeReadScopeBroad => "CLAUDE_READ_SCOPE_BROAD",
             WrapperWarningCode::CodexReadScopeBroad => "CODEX_READ_SCOPE_BROAD",
             WrapperWarningCode::ClaudeEnabledPluginsDeclared => "CLAUDE_ENABLED_PLUGINS_DECLARED",
+            WrapperWarningCode::ViewerUnavailable => "VIEWER_UNAVAILABLE",
         }
     }
 }
@@ -188,20 +198,4 @@ pub fn render_human(envelope: &QueryEnvelope) -> String {
         }
     }
     out
-}
-
-/// Converts already-rendered human-mode output (`render_human`'s own
-/// output) to terminal ANSI styling via `termimad` (PRD
-/// 08-08-pre-0-1-0-cli-skills-markdown-init D3/AC2). Pure string->string
-/// conversion, no I/O, no TTY/env reads -- *whether* to call this at all is
-/// `cli.rs::emit_query`'s routing decision, not this function's, mirroring
-/// how `render_human` above stays a pure formatter and leaves stream
-/// routing to the caller. `width: None` lets termimad auto-detect the real
-/// terminal width; a fixed `Some(width)` is used by tests for determinism.
-pub fn render_markdown_ansi(markdown: &str, width: Option<usize>) -> String {
-    let skin = termimad::MadSkin::default();
-    match width {
-        Some(w) => skin.text(markdown, Some(w)).to_string(),
-        None => skin.term_text(markdown).to_string(),
-    }
 }

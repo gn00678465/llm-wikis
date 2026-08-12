@@ -44,6 +44,22 @@ executable = "codex"
 # unsupported one comes back as an ordinary provider failure, not a
 # configuration error.
 
+# How `query`'s human-mode answer reaches an interactive terminal.
+# Omit this section entirely to keep the default (`backend = "leaf"`).
+[viewer]
+# "leaf"  — render through the external `leaf --inline` viewer (default).
+# "plain" — print the model's markdown exactly as received, no renderer.
+backend = "leaf"
+# Optional: only for a custom install location, a wrapper, or a machine with
+# several versions. Omitted, `leaf` (`leaf.exe` on Windows) is looked up on PATH.
+# executable = 'C:\Tools\leaf\leaf.exe'
+#
+# Rendering applies only to an interactive terminal. A piped or redirected
+# stdout, `--json`, `--plain`, and `NO_COLOR` all print raw markdown and never
+# start the viewer. If the viewer is missing or fails, the full answer still
+# prints as raw markdown and a one-line warning goes to stderr — a viewer
+# problem never costs you the answer and never re-runs the query.
+
 [runtime]
 timeout_seconds    = 180
 max_question_bytes = 65536

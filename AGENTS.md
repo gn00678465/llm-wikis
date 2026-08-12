@@ -35,6 +35,12 @@ task status manually — statuses and next steps are all defined there.
   rg-verified); and AC evidence must not glue a test name onto its file
   path (`tests/foo.rs::test_name`) — the path checker chokes on the fused
   token; keep the path ending at `.rs` and name the test separately.
+  Two more (task 08-12): a prose-only gate row containing ANY backticked
+  token gets that token extracted and executed as a command (a row mentioning
+  `--json` ran `--json` and failed) — prose rows must carry no backticks at
+  all; and a `## Deferral Checks` section, once present, must be a
+  `| id | check | approved-by |` pipe table — writing "no deferrals" as prose
+  is judged unparseable and blocks the round, so delete the section instead.
 - Trestle trace-audit's `suspicious-trace-start` (trace.jsonl's first
   event is neither a preamble session-start nor `trace-rotated`, e.g.
   after a prior task's archive-time waive) false-blocks every later
@@ -61,6 +67,20 @@ task status manually — statuses and next steps are all defined there.
   commit, compare. Confirmed on 2026-08-10 that the same binary went from ~10s
   green to ~846s with both tests failing inside one session, purely from host
   process-enumeration latency.
+- Two collection chores that block a round if skipped, both discovered in
+  task 08-12: prd.md's `## Expected Files` is the scope gate's allowlist, so
+  every file the implementation turns out to touch (test binaries especially —
+  planning cannot predict them all) has to be added before running gates; and
+  every `- [ ]` acceptance criterion must become `- [x]` or each one reports
+  "not checked" and the verdict is block. Note the ordering trap: distill
+  writes to AGENTS.md and .trestle/workspace/*, so running gates *after*
+  distill (rather than before) needs those files in Expected Files too.
+- Any configuration default that reaches out to the host environment must be
+  switched off explicitly in test fixtures' `Config` literals rather than left
+  to `Default`. Task 08-12's `[viewer].backend` defaults to spawning an
+  external binary found on `PATH`; fixtures that inherited the default would
+  pass on a machine with it installed and warn on one without, making the
+  suite depend on what the host has installed.
 - On clap-derived items in src/cli.rs, `///` doc comments BECOME the
   user-facing `--help` text. Rationale, spec citations, and task/decision
   references go in `//` comments; keep `///` to a short imperative

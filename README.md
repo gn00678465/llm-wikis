@@ -132,8 +132,23 @@ llm-wikis query --wiki my-wiki --agent claude --plain -- "What does the ingest p
 ```
 
 On a real terminal, `query`'s human-mode answer renders markdown with
-terminal styling; `--plain` forces raw markdown instead (also forced
+terminal styling through [leaf](https://github.com/RivoLink/leaf), an
+optional external viewer. `--plain` forces raw markdown instead (also forced
 automatically when stdout is piped/redirected or `NO_COLOR` is set).
+
+leaf is not bundled and is never installed for you. Without it, everything
+still works: the full answer prints as raw markdown and a one-line warning
+goes to stderr. Install it from its own instructions (leaf 1.21.0 or newer,
+which is when `--inline` arrived), or turn the viewer off entirely:
+
+```toml
+[viewer]
+backend = "plain"
+```
+
+`llm-wikis doctor` reports viewer readiness as its `viewer` check. A missing
+viewer is a warning, never a failure — doctor's exit code stays 0, because a
+missing renderer costs you formatting, not answers.
 
 Full command reference, JSON output shape, and error codes:
 [`docs/llm-wikis.md`](docs/llm-wikis.md).

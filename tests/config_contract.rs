@@ -6,11 +6,12 @@ use std::fs;
 use std::path::Path;
 
 use llm_wikis::config::{
-    Config, INIT_TEMPLATE, LoadMode, MapEnv, Platform, ProviderWikiConfig, WikiConfig,
-    check_claude_wiki_settings_surface, config_list_envelope, config_list_error_envelope,
-    config_validate_envelope, config_validate_error_envelope, default_cache_path,
-    default_config_path, render_init_template, resolve_and_check_artifact, resolve_wiki_roots,
-    validate_config_override, validate_entrypoint, validate_executable, validate_query_prompt,
+    Config, INIT_TEMPLATE, LoadMode, MapEnv, Platform, ProviderWikiConfig, ViewerBackend,
+    WikiConfig, check_claude_wiki_settings_surface, config_list_envelope,
+    config_list_error_envelope, config_validate_envelope, config_validate_error_envelope,
+    default_cache_path, default_config_path, render_init_template, resolve_and_check_artifact,
+    resolve_wiki_roots, validate_config_override, validate_entrypoint, validate_executable,
+    validate_query_prompt,
 };
 use llm_wikis::error::{AppError, ErrorCode};
 use llm_wikis::output::Agent;
@@ -389,6 +390,68 @@ fn provider_executable_with_arguments_or_shell_syntax_rejected() {
         let err = validate_executable(bad).unwrap_err();
         assert_eq!(err.code, ErrorCode::ConfigInvalid, "{bad}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// `[viewer]` section (issue #8)
+// ---------------------------------------------------------------------------
+
+fn config_with_viewer(section: &str) -> String {
+    format!("{BASE_HEADER}\n{section}")
+}
+
+#[test]
+fn viewer_section_absent_defaults_to_the_leaf_backend() {
+    let cfg = Config::load_str(BASE_HEADER).expect("no [viewer] section is still valid");
+    assert_eq!(cfg.viewer.backend, ViewerBackend::Leaf);
+    assert_eq!(cfg.viewer.executable, None);
+}
+
+#[test]
+fn viewer_backend_accepts_both_supported_values() {
+    for (text, expected) in [
+        ("plain", ViewerBackend::Plain),
+        ("leaf", ViewerBackend::Leaf),
+    ] {
+        let cfg = Config::load_str(&config_with_viewer(&format!(
+            "[viewer]\nbackend = \"{text}\"\n"
+        )))
+        .unwrap_or_else(|e| panic!("backend {text:?} must be accepted: {e:?}"));
+        assert_eq!(cfg.viewer.backend, expected);
+    }
+}
+
+#[test]
+fn viewer_backend_rejects_unknown_values() {
+    for bad in ["termimad", "glow", "", "Leaf"] {
+        let text = config_with_viewer(&format!("[viewer]\nbackend = \"{bad}\"\n"));
+        let err = Config::load_str(&text).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ConfigInvalid, "backend {bad:?}");
+    }
+}
+
+#[test]
+fn viewer_executable_is_validated_like_a_provider_executable() {
+    let good = config_with_viewer("[viewer]\nbackend = \"leaf\"\nexecutable = \"leaf.exe\"\n");
+    assert!(Config::load_str(&good).is_ok());
+
+    for bad in ["leaf --inline", "./leaf", "leaf; rm -rf /", ""] {
+        let text = config_with_viewer(&format!(
+            "[viewer]\nbackend = \"leaf\"\nexecutable = \"{bad}\"\n"
+        ));
+        let err = Config::load_str(&text).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ConfigInvalid, "executable {bad:?}");
+    }
+}
+
+// PRD D12: `fallback` is deliberately NOT a key — it would have exactly one
+// legal value. The fallback behavior itself is unconditional, so the strict
+// schema must reject the key rather than silently accept a no-op.
+#[test]
+fn viewer_rejects_a_fallback_key() {
+    let text = config_with_viewer("[viewer]\nbackend = \"leaf\"\nfallback = \"plain\"\n");
+    let err = Config::load_str(&text).unwrap_err();
+    assert_eq!(err.code, ErrorCode::ConfigInvalid);
 }
 
 // ---------------------------------------------------------------------------

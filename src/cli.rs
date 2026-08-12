@@ -34,9 +34,7 @@ use crate::doctor::{
     list_error_envelope, run_doctor, run_list,
 };
 use crate::error::{AppError, ErrorCode, dominant_exit};
-use crate::output::{
-    Agent, QueryEnvelope, SCHEMA_VERSION, render_human, render_json, render_markdown_ansi,
-};
+use crate::output::{Agent, QueryEnvelope, SCHEMA_VERSION, render_human, render_json};
 use crate::probes::{FileProbeStore, QueryMode};
 use crate::providers::RealProcessRunner;
 use crate::query::{QueryRequest, QueryService};
@@ -211,7 +209,12 @@ fn handle_parse_error(e: &clap::Error, args: &[OsString]) -> i32 {
             // `plain: false` is always safe here: this is a failure envelope
             // (`err` above), and `emit_query`'s rendering routing is only
             // ever consulted on the success branch.
-            emit_query(json_mode, false, query_failure_envelope(None, None, err))
+            emit_query(
+                json_mode,
+                false,
+                None,
+                query_failure_envelope(None, None, err),
+            )
         }
     }
 }
@@ -819,7 +822,29 @@ fn argument_invalid_query(message: impl Into<String>) -> QueryEnvelope {
     )
 }
 
-fn emit_query(json: bool, plain: bool, envelope: QueryEnvelope) -> i32 {
+/// One viewer attempt, reduced to `Ok(rendered)` or `Err(short reason)` -- the
+/// caller only needs to know whether it may print the viewer's bytes.
+fn render_through_viewer(
+    config: &crate::config::ViewerConfig,
+    human: &str,
+) -> Result<String, String> {
+    let viewer = crate::viewer::Viewer::resolve(config, &ProcessEnv).map_err(|e| e.message)?;
+    viewer
+        .render(human, crate::viewer::terminal_width())
+        .map_err(|e| e.message)
+}
+
+/// `viewer` is `None` at the call sites that run before a configuration file
+/// has been loaded. Those all carry an error envelope, which never reaches the
+/// rendering branch below -- but passing `None` rather than a default keeps
+/// "no configuration was read" distinguishable from "the operator configured
+/// the default", instead of inventing a viewer preference nobody expressed.
+fn emit_query(
+    json: bool,
+    plain: bool,
+    viewer: Option<&crate::config::ViewerConfig>,
+    envelope: QueryEnvelope,
+) -> i32 {
     let exit = envelope
         .error
         .as_ref()
@@ -835,13 +860,39 @@ fn emit_query(json: bool, plain: bool, envelope: QueryEnvelope) -> i32 {
         eprint_error_line(err);
     } else {
         let human = render_human(&envelope);
-        // PRD 08-08-pre-0-1-0-cli-skills-markdown-init D3/AC2: TTY-render
-        // through termimad unless `--plain`, a piped/redirected stdout, or
-        // `NO_COLOR` (any value -- no-color.org: presence, not content,
-        // disables color) opt out. Every branch here is byte-for-byte
-        // today's raw `render_human` output except the last.
-        if !plain && std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
-            print!("{}", render_markdown_ansi(&human, None));
+        // PRD 08-08-pre-0-1-0-cli-skills-markdown-init D3/AC2, retargeted by
+        // 08-12 D9: the opt-out conditions are unchanged -- `--plain`, a
+        // piped/redirected stdout, or `NO_COLOR` (any value -- no-color.org:
+        // presence, not content, disables color) all print raw markdown. Only
+        // the renderer behind the remaining branch changed, from an in-process
+        // termimad call to an external `leaf --inline` child. `NO_COLOR` stays
+        // this wrapper's responsibility: leaf does not read it (task 08-12
+        // Findings F4).
+        let leaf_backend = matches!(
+            viewer.map(|v| v.backend),
+            Some(crate::config::ViewerBackend::Leaf)
+        );
+        if !plain
+            && leaf_backend
+            && std::io::stdout().is_terminal()
+            && std::env::var_os("NO_COLOR").is_none()
+        {
+            // Capture-then-commit (08-12 design.md §2): stdout receives either
+            // the viewer's complete output or the raw markdown, never a
+            // half-rendered answer followed by a second full copy. `viewer` is
+            // Some here -- `leaf_backend` cannot be true otherwise.
+            match render_through_viewer(
+                viewer.expect("leaf backend implies a viewer table"),
+                &human,
+            ) {
+                Ok(rendered) => print!("{rendered}"),
+                Err(reason) => {
+                    eprintln!(
+                        "warning: markdown viewer unavailable, printing raw markdown ({reason})"
+                    );
+                    print!("{human}");
+                }
+            }
         } else {
             print!("{human}");
         }
@@ -915,6 +966,7 @@ fn run_query_command(
             return emit_query(
                 json,
                 plain,
+                None,
                 argument_invalid_query(format!(
                     "query requires exactly one --wiki ({QUERY_USAGE_HINT})"
                 )),
@@ -924,6 +976,7 @@ fn run_query_command(
             return emit_query(
                 json,
                 plain,
+                None,
                 argument_invalid_query(format!(
                     "query accepts exactly one --wiki; repeating it or supplying \"all\" is invalid ({QUERY_USAGE_HINT})"
                 )),
@@ -933,16 +986,16 @@ fn run_query_command(
 
     let question_bytes = match resolve_question_bytes(question_positional) {
         Ok(bytes) => bytes,
-        Err(err) => return emit_query(json, plain, query_failure_envelope(None, None, err)),
+        Err(err) => return emit_query(json, plain, None, query_failure_envelope(None, None, err)),
     };
 
     let config_path = match resolve_config_path(override_path) {
         Ok(p) => p,
-        Err(e) => return emit_query(json, plain, query_failure_envelope(None, None, e)),
+        Err(e) => return emit_query(json, plain, None, query_failure_envelope(None, None, e)),
     };
     let config = match Config::load(&config_path) {
         Ok(c) => c,
-        Err(e) => return emit_query(json, plain, query_failure_envelope(None, None, e)),
+        Err(e) => return emit_query(json, plain, None, query_failure_envelope(None, None, e)),
     };
 
     // spec §5.1: `--agent` is optional only when the wiki's derived
@@ -961,6 +1014,7 @@ fn run_query_command(
                     return emit_query(
                         json,
                         plain,
+                        None,
                         argument_invalid_query(
                             "--agent is required: no default_agent is configured and enabled for this wiki",
                         ),
@@ -973,9 +1027,12 @@ fn run_query_command(
 
     let cache_path = match resolve_cache_path() {
         Ok(p) => p,
-        Err(e) => return emit_query(json, plain, query_failure_envelope(None, None, e)),
+        Err(e) => return emit_query(json, plain, None, query_failure_envelope(None, None, e)),
     };
 
+    // Cloned before `config` moves into the request: this is the one call site
+    // that can reach the rendering branch.
+    let viewer_config = config.viewer.clone();
     let request = QueryRequest {
         config,
         config_dir: config_dir_of(&config_path),
@@ -996,7 +1053,7 @@ fn run_query_command(
     if let Some(pb) = spinner {
         pb.finish_and_clear();
     }
-    emit_query(json, plain, envelope)
+    emit_query(json, plain, Some(&viewer_config), envelope)
 }
 
 /// Starts a stderr-only spinner for the duration of the blocking provider

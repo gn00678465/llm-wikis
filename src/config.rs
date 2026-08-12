@@ -376,6 +376,41 @@ fn agent_key(agent: Agent) -> &'static str {
     }
 }
 
+/// How `query`'s human-mode answer reaches the terminal (issue #8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerBackend {
+    /// Write the model's markdown exactly as received — no renderer, no ANSI.
+    Plain,
+    /// Render through the external `leaf --inline` viewer, falling back to
+    /// `Plain` output (plus one stderr warning) whenever that cannot be done.
+    #[default]
+    Leaf,
+}
+
+/// `[viewer]` (issue #8). There is deliberately no `fallback` key: falling back
+/// to raw markdown is unconditional, so a key whose only legal value is
+/// `"plain"` would be configuration that cannot decide anything (PRD D12).
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ViewerConfig {
+    #[serde(default)]
+    pub backend: ViewerBackend,
+    /// Overrides the platform-default `leaf`/`leaf.exe` lookup for a custom
+    /// install location or wrapper. Same shape rules as a provider executable.
+    #[serde(default)]
+    pub executable: Option<String>,
+}
+
+impl ViewerConfig {
+    fn validate(&self) -> Result<(), AppError> {
+        if let Some(exe) = &self.executable {
+            validate_executable(exe)?;
+        }
+        Ok(())
+    }
+}
+
 /// The complete strict configuration document (spec §6). No `[query_profiles]`
 /// table exists in 0.2 — an unknown top-level key of that (or any other) name is
 /// rejected by `deny_unknown_fields`.
@@ -389,6 +424,8 @@ pub struct Config {
     pub providers: ProvidersConfig,
     #[serde(default)]
     pub runtime: RuntimeConfig,
+    #[serde(default)]
+    pub viewer: ViewerConfig,
     #[serde(default)]
     pub wikis: BTreeMap<String, WikiConfig>,
 }
@@ -407,6 +444,7 @@ impl Config {
         if let Some(table) = &self.providers.codex {
             validate_provider_table(table)?;
         }
+        self.viewer.validate()?;
         for (id, wiki) in &self.wikis {
             validate_wiki_id(id)?;
             wiki.validate(&self.providers)?;
@@ -1145,6 +1183,13 @@ executable = "codex"
 # model  = "gpt-5.6-sol"
 # effort = "high"
 
+# Terminal rendering for `query`. "leaf" (the default) renders through the
+# external `leaf --inline` viewer; "plain" prints raw markdown. Piped output,
+# --json, --plain and NO_COLOR always print raw markdown regardless.
+[viewer]
+backend = "leaf"
+# executable = 'C:\Tools\leaf\leaf.exe'
+
 [runtime]
 timeout_seconds    = 180
 max_question_bytes = 65536
@@ -1204,6 +1249,13 @@ executable = "{claude_executable}"
 executable = "{codex_executable}"
 # model  = "gpt-5.6-sol"
 # effort = "high"
+
+# Terminal rendering for `query`. "leaf" (the default) renders through the
+# external `leaf --inline` viewer; "plain" prints raw markdown. Piped output,
+# --json, --plain and NO_COLOR always print raw markdown regardless.
+[viewer]
+backend = "leaf"
+# executable = 'C:\Tools\leaf\leaf.exe'
 
 [runtime]
 timeout_seconds    = 180
