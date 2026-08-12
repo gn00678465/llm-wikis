@@ -1,0 +1,5 @@
+{"reason":"seed row — add real entries via: task.ts add-context <name> <implement|check> <file> <reason>"}
+{"file":"src/config.rs","reason":"INIT_TEMPLATE path quoting + TOML-parse CONFIG_INVALID hint (D2/D3)"}
+{"file":"src/cli.rs","reason":"handle_parse_error usage hint for query without -- ; missing --wiki message (D4)"}
+{"file":"config.example.toml","reason":"same single-quote treatment as the init template (D2)"}
+{"file":"src/query.rs","reason":"entrypoint_unverified() message gains the doctor --live remedial hint (D5)"}

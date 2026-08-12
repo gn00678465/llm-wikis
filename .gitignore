@@ -6,8 +6,8 @@ target/
 # Local probe cache copied in for debugging (see docs/2026-07-28-llm-wikis-external-query-design.md §15.1)
 probes-v1.json
 
-# Local pre-GitHub issue tracker (docs/agents/issue-tracker.md) — deliberately
-# untracked now that GitHub is the tracker of record.
+# Retired local issue tracker — read-only historical archive; new work is
+# tracked in .trestle/tasks/ (see AGENTS.md "Historical archives").
 .scratch/
 
 # Local Claude Code tooling state (personal plugin toggles, scheduler lock

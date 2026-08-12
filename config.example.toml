@@ -13,15 +13,52 @@
 #
 # `content_root` may equal `project_root` exactly (see the "agents" wiki
 # below) — containment is inclusive (specification §6.1).
+#
+# Windows paths: `\` is an escape character inside TOML's double-quoted
+# strings, so a path like C:\Wikis\example must be spelled one of three
+# ways: a single-quoted literal string ('C:\Wikis\example', no escaping at
+# all), a double-quoted string with doubled backslashes
+# ("C:\\Wikis\\example"), or forward slashes ("C:/Wikis/example", which
+# Windows also accepts). This file uses single-quoted literal strings below.
 
 config_version = 1
 default_agent = "claude"
 
 [providers.claude]
 executable = "claude"
+# `model` and `effort` are optional. Unset means the provider CLI keeps
+# choosing for itself and nothing extra is added to its argv. Set them to
+# pin one knowledge base's cost/speed/quality profile:
+#   model  = "opus"
+#   effort = "high"        # claude --effort: low, medium, high, xhigh, max
+# Both apply to `query` and `doctor --live` only — never to the version or
+# authentication probes — and changing either invalidates a published
+# `doctor --live` probe, exactly as changing `query_prompt` does.
 
 [providers.codex]
 executable = "codex"
+#   model  = "gpt-5.6-sol"
+#   effort = "high"        # codex model_reasoning_effort: minimal, low,
+#                          # medium, high, xhigh
+# Which levels a given model accepts is the provider's own question: an
+# unsupported one comes back as an ordinary provider failure, not a
+# configuration error.
+
+# How `query`'s human-mode answer reaches an interactive terminal.
+# Omit this section entirely to keep the default (`backend = "leaf"`).
+[viewer]
+# "leaf"  — render through the external `leaf --inline` viewer (default).
+# "plain" — print the model's markdown exactly as received, no renderer.
+backend = "leaf"
+# Optional: only for a custom install location, a wrapper, or a machine with
+# several versions. Omitted, `leaf` (`leaf.exe` on Windows) is looked up on PATH.
+# executable = 'C:\Tools\leaf\leaf.exe'
+#
+# Rendering applies only to an interactive terminal. A piped or redirected
+# stdout, `--json`, `--plain`, and `NO_COLOR` all print raw markdown and never
+# start the viewer. If the viewer is missing or fails, the full answer still
+# prints as raw markdown and a one-line warning goes to stderr — a viewer
+# problem never costs you the answer and never re-runs the query.
 
 [runtime]
 timeout_seconds    = 180
@@ -33,11 +70,14 @@ max_stderr_bytes   = 65536
 # (.claude/skills/, .agents/skills/) live directly under the wiki root itself.
 [wikis.agents]
 title        = "Agents Knowledge Base"
-project_root = "D:/Wikis/agents"
-content_root = "D:/Wikis/agents"
+project_root = 'D:/Wikis/agents'
+content_root = 'D:/Wikis/agents'
 agents       = ["claude", "codex"]
 query_prompt = "Use the wiki-query skill to answer from this wiki."
 
+# The referenced SKILL.md must declare `allowed-tools: Read, Grep, Glob`
+# in its own frontmatter, or --permission-mode dontAsk denies its reads
+# mid-turn (docs/llm-wikis.md §2.7a).
 [wikis.agents.claude]
 load       = "project_skill"
 entrypoint = "/wiki-query"
@@ -52,8 +92,8 @@ skill_path = ".agents/skills/wiki-query/SKILL.md"
 # so .claude/ and .agents/ sit as siblings of content_root, not beneath it.
 [wikis.harness-engineering]
 title        = "Harness Engineering"
-project_root = "D:/Wikis/harness-engineering"
-content_root = "D:/Wikis/harness-engineering/wiki"
+project_root = 'D:/Wikis/harness-engineering'
+content_root = 'D:/Wikis/harness-engineering/wiki'
 agents       = ["claude", "codex"]
 query_prompt = "Use the llm-wiki skill's query workflow to answer from this wiki."
 

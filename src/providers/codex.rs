@@ -13,8 +13,9 @@ use crate::output::{Agent, RawFormat, Warning, WrapperWarningCode};
 use crate::process::{ProcessRequest, ResolvedExecutable};
 
 use super::{
-    AuthStatus, InvokeOutcome, ProcessRunner, ProviderAdapter, ProviderRequest, cap_diagnostic,
-    map_nonzero_exit, map_termination, no_child_outcome, result_json_schema,
+    AuthStatus, InvokeOutcome, NON_INTERACTIVE_SYSTEM_DIRECTIVES, ProcessRunner, ProviderAdapter,
+    ProviderRequest, cap_diagnostic, map_nonzero_exit, map_termination, no_child_outcome,
+    result_json_schema,
 };
 
 /// The exact, unconditional `CODEX_READ_SCOPE_BROAD` message text (spec
@@ -35,8 +36,27 @@ pub fn read_scope_broad_warning() -> Warning {
 /// `--add-dir` (that flag grants an additional *writable* root) and never
 /// includes the entrypoint or `query_prompt` — those exist only in the
 /// stdin prompt.
-pub fn build_argv(project_root: &Path, output_schema_path: &Path) -> Vec<OsString> {
-    vec![
+///
+/// The `-c developer_instructions=<...>` override (PRD
+/// 08-06-pre-0-1-0-cli-refinements item 3/D5) is Codex's additive
+/// system-prompt-append equivalent to Claude's `--append-system-prompt`
+/// (research/provider-cli-flags.md §4: no dedicated flag exists for `exec`;
+/// `developer_instructions` falls through from the generic `-c` override to
+/// the same config field an eventual dedicated flag would populate,
+/// live-verified to additively influence the final answer). Grouped
+/// adjacent to the pre-existing `-c mcp_servers={}` override purely for
+/// readability — `-c` overrides are order-independent among themselves.
+/// [`crate::providers::NON_INTERACTIVE_SYSTEM_DIRECTIVES`]'s own doc
+/// comment states why this value must stay free of `"`/`\`/newline
+/// characters: the `-c` value is TOML-parsed before falling back to a raw
+/// literal.
+pub fn build_argv(
+    project_root: &Path,
+    output_schema_path: &Path,
+    model: Option<&str>,
+    effort: Option<&str>,
+) -> Vec<OsString> {
+    let mut args = vec![
         OsString::from("--ask-for-approval"),
         OsString::from("never"),
         OsString::from("exec"),
@@ -49,6 +69,32 @@ pub fn build_argv(project_root: &Path, output_schema_path: &Path) -> Vec<OsStrin
         OsString::from("--ignore-user-config"),
         OsString::from("-c"),
         OsString::from("mcp_servers={}"),
+        OsString::from("-c"),
+        OsString::from(format!(
+            "developer_instructions={NON_INTERACTIVE_SYSTEM_DIRECTIVES}"
+        )),
+    ];
+    // Issue #7. `--ignore-user-config` above is exactly why these have to be
+    // explicit argv: a model/effort configured in the operator's own
+    // `config.toml` for Codex is deliberately not read, so llm-wikis' registry
+    // is the only channel left. Codex has no dedicated reasoning-effort flag —
+    // the documented key is the `model_reasoning_effort` config override, so it
+    // rides the same `-c` mechanism as the two overrides above (`-c` is the
+    // short form of `--config`; kept short purely to match its neighbours).
+    // The value is quoted so Codex's TOML pass parses it as a string rather
+    // than falling through to the raw-literal path; `validate_effort`'s token
+    // set guarantees nothing inside ever needs escaping.
+    if let Some(model) = model {
+        args.push(OsString::from("--model"));
+        args.push(OsString::from(model));
+    }
+    if let Some(effort) = effort {
+        args.push(OsString::from("-c"));
+        args.push(OsString::from(format!(
+            "model_reasoning_effort=\"{effort}\""
+        )));
+    }
+    args.extend([
         OsString::from("--disable"),
         OsString::from("browser_use"),
         OsString::from("--disable"),
@@ -57,7 +103,8 @@ pub fn build_argv(project_root: &Path, output_schema_path: &Path) -> Vec<OsStrin
         OsString::from(output_schema_path),
         OsString::from("--json"),
         OsString::from("-"),
-    ]
+    ]);
+    args
 }
 
 fn invalid_native(message: impl Into<String>) -> AppError {
@@ -336,7 +383,12 @@ impl ProviderAdapter for CodexAdapter {
             Ok(a) => a,
             Err(e) => return no_child_outcome(e),
         };
-        let args = build_argv(&request.project_root, schema_artifact.path());
+        let args = build_argv(
+            &request.project_root,
+            schema_artifact.path(),
+            request.model.as_deref(),
+            request.effort.as_deref(),
+        );
         let outcome = match runner.run(ProcessRequest {
             executable: request.executable.clone(),
             args,

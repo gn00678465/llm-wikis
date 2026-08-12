@@ -83,9 +83,9 @@ fn schema_version_is_the_literal_1_0_on_every_envelope() {
 }
 
 #[test]
-fn wrapper_warning_codes_are_exactly_the_closed_four() {
+fn wrapper_warning_codes_are_exactly_the_closed_five() {
     // R-32 added CLAUDE_ENABLED_PLUGINS_DECLARED, growing this from three to
-    // four codes.
+    // four codes; issue #8 added VIEWER_UNAVAILABLE, growing it to five.
     let codes: Vec<&str> = WrapperWarningCode::ALL.iter().map(|c| c.as_str()).collect();
     assert_eq!(
         codes,
@@ -93,7 +93,8 @@ fn wrapper_warning_codes_are_exactly_the_closed_four() {
             "WIKI_SCHEMA_ABSENT",
             "CLAUDE_READ_SCOPE_BROAD",
             "CODEX_READ_SCOPE_BROAD",
-            "CLAUDE_ENABLED_PLUGINS_DECLARED"
+            "CLAUDE_ENABLED_PLUGINS_DECLARED",
+            "VIEWER_UNAVAILABLE"
         ]
     );
     assert!(serde_json::from_str::<WrapperWarningCode>("\"INDEX_MAY_BE_STALE\"").is_err());

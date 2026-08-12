@@ -303,8 +303,10 @@ fn join_maybe_absolute(anchor: &Path, configured: &str) -> PathBuf {
 /// The implementation-owned provider safety/contract shape version (spec
 /// §15.1: "the implementation-owned provider safety/contract version").
 /// Bump this whenever `build_prompt`/`build_argv`'s wire shape changes in a
-/// way that should invalidate every existing probe record.
-pub const PROVIDER_CONTRACT_VERSION: &str = "1";
+/// way that should invalidate every existing probe record. `"2"`: issue #7
+/// added the optional `--model`/`--effort` (Claude) and
+/// `--model`/`model_reasoning_effort` (Codex) argv tail.
+pub const PROVIDER_CONTRACT_VERSION: &str = "2";
 
 /// The exact inputs spec §15.1 names for `compatibility_fingerprint`. Public
 /// so a test (or Task 11's doctor, when it publishes a record) can compute
@@ -323,6 +325,11 @@ pub struct CompatibilityFingerprintInput<'a> {
     pub skill_path: Option<&'a str>,
     pub plugin_dir: Option<&'a str>,
     pub executable_declaration: &'a str,
+    /// The rest of the `[providers.<agent>]` declaration (issue #7). Part of
+    /// the fingerprint for the same reason `query_prompt` is: a probe verified
+    /// against one model/effort does not vouch for another.
+    pub model_declaration: Option<&'a str>,
+    pub effort_declaration: Option<&'a str>,
     pub provider_contract_version: &'static str,
 }
 
@@ -345,10 +352,21 @@ pub fn load_mode_str(load: LoadMode) -> &'static str {
     }
 }
 
-fn entrypoint_unverified() -> AppError {
+/// PRD 08-07-first-run-config-and-query-ux-fixes D5: a static `doctor` pass
+/// followed by `query` failing `ENTRYPOINT_UNVERIFIED` with no next step
+/// left an operator stuck (user repro 3, 2026-08-07) -- the live fingerprint
+/// gate (spec §8.1 step 8) is unchanged, only its message now names the
+/// remedial command. `wiki_id`/`agent` are always in scope at every call
+/// site below (both come from the already-resolved `request`/`agent`
+/// bindings), so the hint always carries the real selectors rather than a
+/// generic placeholder.
+fn entrypoint_unverified(wiki_id: &str, agent: Agent) -> AppError {
     AppError::new(
         ErrorCode::EntrypointUnverified,
-        "the selected entrypoint fingerprint has not passed a current live doctor probe",
+        format!(
+            "the selected entrypoint fingerprint has not passed a current live doctor probe -- run `llm-wikis doctor --wiki {wiki_id} --agent {} --live` first",
+            agent_command_name(agent)
+        ),
     )
 }
 
@@ -461,21 +479,18 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
             Agent::Codex => wiki.codex.as_ref(),
         }
         .expect("Config::validate guarantees a provider table for every enabled agent");
-        let executable_value = match agent {
-            Agent::Claude => request
-                .config
-                .providers
-                .claude
-                .as_ref()
-                .and_then(|p| p.executable.clone()),
-            Agent::Codex => request
-                .config
-                .providers
-                .codex
-                .as_ref()
-                .and_then(|p| p.executable.clone()),
-        }
-        .unwrap_or_else(|| agent_command_name(agent).to_string());
+        // The whole `[providers.<agent>]` declaration, not just its
+        // `executable`: issue #7 added `model`/`effort` to the same table, and
+        // all three are read here so a third copy of this match never appears.
+        let provider_declaration = match agent {
+            Agent::Claude => request.config.providers.claude.as_ref(),
+            Agent::Codex => request.config.providers.codex.as_ref(),
+        };
+        let executable_value = provider_declaration
+            .and_then(|p| p.executable.clone())
+            .unwrap_or_else(|| agent_command_name(agent).to_string());
+        let model_value = provider_declaration.and_then(|p| p.model.clone());
+        let effort_value = provider_declaration.and_then(|p| p.effort.clone());
 
         let fail = |warnings: Vec<Warning>,
                     child_exit_code: Option<i32>,
@@ -635,12 +650,12 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
                 let record = self
                     .probes
                     .current_record(&key)?
-                    .ok_or_else(entrypoint_unverified)?;
+                    .ok_or_else(|| entrypoint_unverified(&request.wiki_id, agent))?;
                 if record.agent_executable != executable.path.display().to_string() {
-                    return Err(entrypoint_unverified());
+                    return Err(entrypoint_unverified(&request.wiki_id, agent));
                 }
                 if record.agent_version != version {
-                    return Err(entrypoint_unverified());
+                    return Err(entrypoint_unverified(&request.wiki_id, agent));
                 }
                 let skill_dir = skill_fingerprint_dir(
                     &request.config_dir,
@@ -649,7 +664,7 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
                 )?;
                 let current_skill_fingerprint = compute_skill_fingerprint(&skill_dir)?;
                 if record.skill_fingerprint != current_skill_fingerprint {
-                    return Err(entrypoint_unverified());
+                    return Err(entrypoint_unverified(&request.wiki_id, agent));
                 }
                 let compat_input = CompatibilityFingerprintInput {
                     wiki_id: &request.wiki_id,
@@ -663,12 +678,14 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
                     skill_path: provider_table.skill_path.as_deref(),
                     plugin_dir: provider_table.plugin_dir.as_deref(),
                     executable_declaration: &executable_value,
+                    model_declaration: model_value.as_deref(),
+                    effort_declaration: effort_value.as_deref(),
                     provider_contract_version: PROVIDER_CONTRACT_VERSION,
                 };
                 let current_compatibility_fingerprint =
                     compute_compatibility_fingerprint(&compat_input);
                 if record.compatibility_fingerprint != current_compatibility_fingerprint {
-                    return Err(entrypoint_unverified());
+                    return Err(entrypoint_unverified(&request.wiki_id, agent));
                 }
                 Ok(())
             })();
@@ -741,6 +758,8 @@ impl<R: ProcessRunner, P: ProbeReader> QueryService<R, P> {
             query_prompt: wiki.query_prompt.clone(),
             question: question.clone(),
             plugin_dir,
+            model: model_value.clone(),
+            effort: effort_value.clone(),
             timeout: Duration::from_secs(request.config.runtime.timeout_seconds),
             max_stdout_bytes: request.config.runtime.max_stdout_bytes as usize,
             max_stderr_bytes: request.config.runtime.max_stderr_bytes as usize,

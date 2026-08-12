@@ -1,0 +1,3 @@
+{"reason":"seed row — add real entries via: task.ts add-context <name> <implement|check> <file> <reason>"}
+{"file":"tests/spec_drift.rs","reason":"雙向機械核對規格 §13 warning code 與 §15 check name，兩個詞彙表漏改會被擋下"}
+{"file":"tests/output_contract.rs","reason":"render_markdown_ansi 的兩個既有測試（08-08 AC2 證據）隨 termimad 移除"}

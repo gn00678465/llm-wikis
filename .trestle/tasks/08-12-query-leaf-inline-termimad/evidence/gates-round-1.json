@@ -1,0 +1,338 @@
+{
+  "taskName": "08-12-query-leaf-inline-termimad",
+  "round": 1,
+  "verdict": "pass",
+  "gates": [
+    {
+      "id": "AC1",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC1: `[viewer]` 區段支援 `backend`（`plain`/`leaf`，預設 `leaf`）與 optional `executable`；非法值在 config load 階段即 `CONFIG_INVALID`。 (evidence: src/config.rs, tests/config_contract.rs)"
+    },
+    {
+      "id": "AC2",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC2: `backend = \"leaf\"` 且 stdout 為 TTY、未帶 --plain、NO_COLOR 未設時， 完整 markdown 經 stdin 交給 leaf，argv 為 --inline 加一個封閉列舉組出的 SPEC。 (evidence: src/cli.rs, tests/cli_contract.rs)"
+    },
+    {
+      "id": "AC3",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC3: pipe、重新導向、--json、--plain、NO_COLOR 五種情況都不 spawn leaf， stdout 與本任務前逐位元相同且不含 ANSI escape。 (evidence: tests/cli_contract.rs, tests/output_contract.rs)"
+    },
+    {
+      "id": "AC4",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC4: viewer 失敗（找不到執行檔、啟動失敗、非零退出碼）時 stdout 輸出完整 且唯一一份原始 markdown，警告只寫 stderr，且不重新執行 provider query。 (evidence: src/cli.rs, tests/cli_contract.rs)"
+    },
+    {
+      "id": "AC5",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC5: doctor 新增 viewer check，狀態依 D5 的表；缺 leaf 為 warn 且 doctor 退出碼維持 0；探測實際使用 --inline 而非 --version。 (evidence: src/doctor.rs, tests/doctor.rs)"
+    },
+    {
+      "id": "AC6",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC6: `checks[].name` 與 wrapper warning code 兩個封閉詞彙表同步擴充， 規格文件與常數一致，spec_drift 雙向核對通過。 (evidence: src/output.rs, docs/2026-07-28-llm-wikis-external-query-design.md, tests/spec_drift.rs)"
+    },
+    {
+      "id": "AC7",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC7: termimad 依賴、`render_markdown_ansi` 與其測試全部移除，repo 內不再 有 termimad 或 crossterm 的直接依賴。 (evidence: Cargo.toml, src/output.rs)"
+    },
+    {
+      "id": "AC8",
+      "category": "ac",
+      "ok": true,
+      "detail": "AC8: README、operator guide、config.example.toml、config init 樣板與規格 文件同步說明 leaf 安裝需求、設定方式與故障排除。 (evidence: README.md, docs/llm-wikis.md, config.example.toml, src/config.rs)"
+    },
+    {
+      "id": "verify-1",
+      "category": "verification",
+      "ok": true,
+      "detail": "passed: cargo fmt --all --check"
+    },
+    {
+      "id": "verify-2",
+      "category": "verification",
+      "ok": true,
+      "detail": "passed: cargo clippy --all-targets --all-features -- -D warnings"
+    },
+    {
+      "id": "verify-3",
+      "category": "verification",
+      "ok": true,
+      "detail": "passed: cargo test --all-targets --all-features -- --test-threads=1"
+    },
+    {
+      "id": "scope-AGENTS.md",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: AGENTS.md"
+    },
+    {
+      "id": "scope-Cargo.lock",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: Cargo.lock"
+    },
+    {
+      "id": "scope-Cargo.toml",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: Cargo.toml"
+    },
+    {
+      "id": "scope-README.md",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: README.md"
+    },
+    {
+      "id": "scope-config.example.toml",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: config.example.toml"
+    },
+    {
+      "id": "scope-docs/2026-07-28-llm-wikis-external-query-design.md",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: docs/2026-07-28-llm-wikis-external-query-design.md"
+    },
+    {
+      "id": "scope-docs/llm-wikis.md",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: docs/llm-wikis.md"
+    },
+    {
+      "id": "scope-src/cli.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: src/cli.rs"
+    },
+    {
+      "id": "scope-src/config.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: src/config.rs"
+    },
+    {
+      "id": "scope-src/doctor.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: src/doctor.rs"
+    },
+    {
+      "id": "scope-src/lib.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: src/lib.rs"
+    },
+    {
+      "id": "scope-src/output.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: src/output.rs"
+    },
+    {
+      "id": "scope-tests/config_contract.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: tests/config_contract.rs"
+    },
+    {
+      "id": "scope-tests/doctor.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: tests/doctor.rs"
+    },
+    {
+      "id": "scope-tests/list.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: tests/list.rs"
+    },
+    {
+      "id": "scope-tests/output_contract.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: tests/output_contract.rs"
+    },
+    {
+      "id": "scope-tests/query_service.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: tests/query_service.rs"
+    },
+    {
+      "id": "scope-tests/spec_drift.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: tests/spec_drift.rs"
+    },
+    {
+      "id": "scope-src/viewer.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: src/viewer.rs"
+    },
+    {
+      "id": "scope-tests/viewer.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: tests/viewer.rs"
+    },
+    {
+      "id": "G1",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo build --all-targets --all-features"
+    },
+    {
+      "id": "G2",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo fmt --all --check"
+    },
+    {
+      "id": "G3",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo clippy --all-targets --all-features -- -D warnings"
+    },
+    {
+      "id": "G4",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo test --all-targets --all-features -- --test-threads=1"
+    },
+    {
+      "id": "G5",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo test --test config_contract -- --test-threads=1"
+    },
+    {
+      "id": "G6",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo test --test cli_contract -- --test-threads=1"
+    },
+    {
+      "id": "G7",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo test --test doctor -- --test-threads=1"
+    },
+    {
+      "id": "G8",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo test --test spec_drift -- --test-threads=1"
+    },
+    {
+      "id": "G9",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo test --test output_contract -- --test-threads=1"
+    },
+    {
+      "id": "G10",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"pub mod viewer;\" src/lib.rs"
+    },
+    {
+      "id": "G11",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"VIEWER_UNAVAILABLE\" src/output.rs"
+    },
+    {
+      "id": "G12",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"viewer\" src/output.rs"
+    },
+    {
+      "id": "G13",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"inline\" src/viewer.rs"
+    },
+    {
+      "id": "G14",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"console\" Cargo.toml"
+    },
+    {
+      "id": "G15",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg --files-without-match -F \"termimad\" Cargo.toml"
+    },
+    {
+      "id": "G16",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg --files-without-match -F \"render_markdown_ansi\" src/output.rs"
+    },
+    {
+      "id": "G17",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"[viewer]\" config.example.toml"
+    },
+    {
+      "id": "G18",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"leaf\" README.md"
+    },
+    {
+      "id": "G19",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"leaf\" docs/llm-wikis.md"
+    },
+    {
+      "id": "G20",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"VIEWER_UNAVAILABLE\" docs/2026-07-28-llm-wikis-external-query-design.md"
+    },
+    {
+      "id": "G21",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -n -- \"-inline\" docs/llm-wikis.md"
+    }
+  ],
+  "manual": [
+    {
+      "id": "G22",
+      "check": "pipe、重新導向、JSON 模式、plain 旗標、NO_COLOR 五條路徑的 stdout 相對 base commit 逐位元不變且不含 ANSI escape —— evaluator 直接比對 tests/cli_contract.rs 中對應斷言相對 base 的 diff，既有期望值不得被放寬或刪除"
+    },
+    {
+      "id": "G23",
+      "check": "viewer 失敗時 stdout 恰好一份完整原始 markdown、無半截 leaf 輸出、無重複內容，警告只在 stderr —— evaluator 核對 design.md 第 2 節失敗分支表的六個分支在 src/cli.rs 都有對應處理，且每一條都在 render 回傳成功之前不寫入 stdout"
+    },
+    {
+      "id": "G24",
+      "check": "doctor 的 viewer 探測整個 run 只執行一次（不隨 wiki/agent pair 重複 spawn），且 viewer check 固定排在每個 pair 的 checks 末端，既有九項相對位置不變 —— evaluator 讀 src/doctor.rs 確認探測結果被 clone 而非重算"
+    },
+    {
+      "id": "G25",
+      "check": "缺 leaf 時 doctor 退出碼維持 0（warn 而非 fail），且 viewer 的失敗未進入 §14 錯誤碼表 —— evaluator 確認 src/error.rs 的 ErrorCode 沒有新增變體"
+    }
+  ],
+  "rerun": true
+}

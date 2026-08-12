@@ -288,8 +288,43 @@ fn baseline_input(query_prompt: &str) -> CompatibilityFingerprintInput<'static> 
         skill_path: Some(".claude/skills/wiki-query/SKILL.md"),
         plugin_dir: None,
         executable_declaration: "claude",
+        model_declaration: None,
+        effort_declaration: None,
         provider_contract_version: PROVIDER_CONTRACT_VERSION,
     }
+}
+
+// Issue #7 / PRD D7: a probe published against one model or effort must not
+// vouch for another — the same reasoning §15.1 already applies to
+// `query_prompt`, since both change what the provider was asked to do.
+#[test]
+fn compatibility_fingerprint_changes_when_model_or_effort_changes() {
+    let base = baseline_input("Use the wiki-query skill to answer from this wiki.");
+    let base_fp = compute_compatibility_fingerprint(&base);
+
+    let mut with_model = baseline_input("Use the wiki-query skill to answer from this wiki.");
+    with_model.model_declaration = Some("opus");
+    let with_model_fp = compute_compatibility_fingerprint(&with_model);
+    assert_ne!(base_fp, with_model_fp);
+
+    let mut other_model = baseline_input("Use the wiki-query skill to answer from this wiki.");
+    other_model.model_declaration = Some("haiku");
+    assert_ne!(
+        with_model_fp,
+        compute_compatibility_fingerprint(&other_model)
+    );
+
+    let mut with_effort = baseline_input("Use the wiki-query skill to answer from this wiki.");
+    with_effort.effort_declaration = Some("high");
+    let with_effort_fp = compute_compatibility_fingerprint(&with_effort);
+    assert_ne!(base_fp, with_effort_fp);
+
+    let mut other_effort = baseline_input("Use the wiki-query skill to answer from this wiki.");
+    other_effort.effort_declaration = Some("low");
+    assert_ne!(
+        with_effort_fp,
+        compute_compatibility_fingerprint(&other_effort)
+    );
 }
 
 #[test]

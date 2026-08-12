@@ -142,6 +142,12 @@ pub struct ProviderRequest {
     pub query_prompt: String,
     pub question: String,
     pub plugin_dir: Option<PathBuf>,
+    /// Optional provider model/reasoning effort from `[providers.<agent>]`
+    /// (issue #7). Present only on the `query` path — which `doctor --live`
+    /// reuses — never on the version or auth probes, which build their own
+    /// fixed argv.
+    pub model: Option<String>,
+    pub effort: Option<String>,
     pub timeout: Duration,
     pub max_stdout_bytes: usize,
     pub max_stderr_bytes: usize,
@@ -332,6 +338,20 @@ pub fn cap_diagnostic(bytes: &[u8]) -> String {
 
 pub const CONTRACT: &str = "wiki-query/v1";
 pub const MODE: &str = "external-readonly";
+
+/// Item 3's non-interactive directives (PRD 08-06-pre-0-1-0-cli-refinements,
+/// D5): delivered to each provider via its own system-prompt-append
+/// mechanism (Claude's `--append-system-prompt`, Codex's `-c
+/// developer_instructions=`), **not** via the `constraints` array above —
+/// that array is a separate, closed, spec-§7.1 contract (byte-identical
+/// across providers, tested by `tests/prompt_envelope.rs`) this task does
+/// not touch. No `"`, `\`, or newline characters appear in this text:
+/// Codex's `-c` value is TOML-parsed first and falls back to a raw-string
+/// literal only when TOML parsing fails (research/provider-cli-flags.md
+/// §4) — a quote or backslash here could parse as valid (and different)
+/// TOML instead of falling through to the intended literal text, live-
+/// verified only for the quote/backslash-free case.
+pub const NON_INTERACTIVE_SYSTEM_DIRECTIVES: &str = "Answer directly and stop. Do not ask whether to save the answer. Do not update the wiki, its index, frontmatter, or any log. Do not ask a follow-up question; this is a non-interactive CLI with no one present to answer it.";
 
 /// The five constraint entries byte-identical across providers (spec §7.1).
 /// Transcribed verbatim, in order, with a gap left for the provider-specific

@@ -1,0 +1,23 @@
+{
+  "id": "08-10-provider-model-effort",
+  "title": "provider 設定支援 Claude/Codex model 與 reasoning effort",
+  "status": "completed",
+  "complexity": "complex",
+  "created": "2026-08-10T00:00:00.000Z",
+  "developer": "Madao",
+  "rounds": {
+    "evaluate": 1,
+    "rollback": 0,
+    "baseline": [
+      ".trestle/tasks/08-10-provider-model-effort/check.jsonl",
+      ".trestle/tasks/08-10-provider-model-effort/checklist.md",
+      ".trestle/tasks/08-10-provider-model-effort/design.md",
+      ".trestle/tasks/08-10-provider-model-effort/implement.jsonl",
+      ".trestle/tasks/08-10-provider-model-effort/implement.md",
+      ".trestle/tasks/08-10-provider-model-effort/prd.md",
+      ".trestle/tasks/08-10-provider-model-effort/task.json"
+    ],
+    "implemented": 1
+  },
+  "deferrals": []
+}

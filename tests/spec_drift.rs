@@ -123,7 +123,7 @@ fn section_15_check_names_match_implemented_set() {
         spec_names, implemented,
         "spec/implementation disagreement on Section 15 checks[].name vocabulary"
     );
-    assert_eq!(spec_names.len(), 9);
+    assert_eq!(spec_names.len(), 10);
 }
 
 #[test]

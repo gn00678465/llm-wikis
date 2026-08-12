@@ -155,7 +155,7 @@ fn default_max_stderr_bytes() -> u64 {
 /// `#[serde(default)]`); each field independently defaults via its own
 /// `default = "..."` function, so a partially-specified table still fills in the
 /// missing fields individually rather than replacing the whole table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     #[serde(default = "default_timeout_seconds")]
@@ -210,7 +210,7 @@ impl RuntimeConfig {
 }
 
 /// `[providers.<agent>]` (spec §6). Table is optional per provider.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProvidersConfig {
     #[serde(default)]
@@ -228,15 +228,26 @@ impl ProvidersConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
     #[serde(default)]
     pub executable: Option<String>,
+    /// Optional provider model, passed through as one argv value on `query`
+    /// and `doctor --live` only (issue #7). Unset means "whatever the provider
+    /// CLI would pick on its own" — nothing extra reaches the argv.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Optional reasoning effort, mapped per provider (Claude `--effort`,
+    /// Codex `model_reasoning_effort`). Whether a given model supports a given
+    /// level is the provider CLI's question, not this wrapper's — see
+    /// [`validate_effort`].
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 /// `load` (spec §6.2). Exactly two supported modes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LoadMode {
     ProjectSkill,
@@ -245,7 +256,7 @@ pub enum LoadMode {
 
 /// `[wikis.<id>.<agent>]` (spec §6.2). Field requiredness beyond `load`/`entrypoint`
 /// depends on `load` and is checked semantically, not structurally.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderWikiConfig {
     pub load: LoadMode,
@@ -282,7 +293,7 @@ impl ProviderWikiConfig {
 
 /// `[wikis.<id>]` (spec §6). No `query_profiles` table exists in 0.2 — this struct
 /// is the complete closed shape.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WikiConfig {
     pub title: String,
@@ -365,10 +376,45 @@ fn agent_key(agent: Agent) -> &'static str {
     }
 }
 
+/// How `query`'s human-mode answer reaches the terminal (issue #8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerBackend {
+    /// Write the model's markdown exactly as received — no renderer, no ANSI.
+    Plain,
+    /// Render through the external `leaf --inline` viewer, falling back to
+    /// `Plain` output (plus one stderr warning) whenever that cannot be done.
+    #[default]
+    Leaf,
+}
+
+/// `[viewer]` (issue #8). There is deliberately no `fallback` key: falling back
+/// to raw markdown is unconditional, so a key whose only legal value is
+/// `"plain"` would be configuration that cannot decide anything (PRD D12).
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ViewerConfig {
+    #[serde(default)]
+    pub backend: ViewerBackend,
+    /// Overrides the platform-default `leaf`/`leaf.exe` lookup for a custom
+    /// install location or wrapper. Same shape rules as a provider executable.
+    #[serde(default)]
+    pub executable: Option<String>,
+}
+
+impl ViewerConfig {
+    fn validate(&self) -> Result<(), AppError> {
+        if let Some(exe) = &self.executable {
+            validate_executable(exe)?;
+        }
+        Ok(())
+    }
+}
+
 /// The complete strict configuration document (spec §6). No `[query_profiles]`
 /// table exists in 0.2 — an unknown top-level key of that (or any other) name is
 /// rejected by `deny_unknown_fields`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub config_version: u32,
@@ -378,6 +424,8 @@ pub struct Config {
     pub providers: ProvidersConfig,
     #[serde(default)]
     pub runtime: RuntimeConfig,
+    #[serde(default)]
+    pub viewer: ViewerConfig,
     #[serde(default)]
     pub wikis: BTreeMap<String, WikiConfig>,
 }
@@ -390,18 +438,13 @@ impl Config {
             return Err(config_invalid("config_version must equal 1"));
         }
         self.runtime.validate()?;
-        if let Some(ProviderConfig {
-            executable: Some(exe),
-        }) = &self.providers.claude
-        {
-            validate_executable(exe)?;
+        if let Some(table) = &self.providers.claude {
+            validate_provider_table(table)?;
         }
-        if let Some(ProviderConfig {
-            executable: Some(exe),
-        }) = &self.providers.codex
-        {
-            validate_executable(exe)?;
+        if let Some(table) = &self.providers.codex {
+            validate_provider_table(table)?;
         }
+        self.viewer.validate()?;
         for (id, wiki) in &self.wikis {
             validate_wiki_id(id)?;
             wiki.validate(&self.providers)?;
@@ -418,10 +461,34 @@ impl Config {
 
     /// Parses and validates configuration text directly (no filesystem access).
     pub fn load_str(text: &str) -> Result<Config, AppError> {
-        let config: Config = toml::from_str(text)
-            .map_err(|e| config_invalid(format!("configuration is not valid TOML: {e}")))?;
+        let config: Config =
+            toml::from_str(text).map_err(|e| config_invalid(toml_parse_error_message(&e)))?;
         config.validate()?;
         Ok(config)
+    }
+}
+
+/// PRD 08-07-first-run-config-and-query-ux-fixes D3: a hand-edited config with
+/// an unescaped Windows path in a TOML basic (double-quoted) string — e.g.
+/// `content_root = "E:\not_company\..."` — fails with the `toml` crate's own
+/// "missing escaped value" parse error, which by itself gives no clue that
+/// three legal spellings exist. Detected conservatively by matching the
+/// stable marker phrase the `toml` 0.9 parser emits for this exact error
+/// class (confirmed against the live crate: `toml::from_str` on
+/// `content_root = "E:\not_company\wiki"` — verified interactively, not
+/// hardcoded from documentation) rather than trying to re-parse the error's
+/// span/structure. Every other TOML parse failure (unclosed table, missing
+/// value, duplicate key, ...) keeps its original message shape unchanged.
+fn toml_parse_error_message(e: &toml::de::Error) -> String {
+    let base = format!("configuration is not valid TOML: {e}");
+    if e.to_string().contains("missing escaped value") {
+        format!(
+            "{base} -- Windows paths in double-quoted TOML strings must escape \
+`\\`: use a single-quoted literal string ('C:\\path'), double the backslashes \
+in a double-quoted string (\"C:\\\\path\"), or use forward slashes (\"C:/path\")"
+        )
+    } else {
+        base
     }
 }
 
@@ -460,6 +527,93 @@ pub fn validate_query_prompt(prompt: &str) -> Result<(), AppError> {
     if prompt.len() > 500 {
         return Err(config_invalid(
             "query_prompt must be at most 500 UTF-8 bytes",
+        ));
+    }
+    Ok(())
+}
+
+/// Every value-shape rule a `[providers.<agent>]` table owns (spec §6.1;
+/// issue #7 for `model`/`effort`). Each field is independently optional.
+fn validate_provider_table(table: &ProviderConfig) -> Result<(), AppError> {
+    if let Some(exe) = &table.executable {
+        validate_executable(exe)?;
+    }
+    if let Some(model) = &table.model {
+        validate_model(model)?;
+    }
+    if let Some(effort) = &table.effort {
+        validate_effort(effort)?;
+    }
+    Ok(())
+}
+
+/// Longest accepted `model` value, in UTF-8 bytes. Well clear of every
+/// published alias and fully qualified model ID, and short enough that a
+/// pasted paragraph is rejected as configuration rather than forwarded to a
+/// provider.
+const MAX_MODEL_BYTES: usize = 128;
+
+/// Longest accepted `effort` value, in UTF-8 bytes.
+const MAX_EFFORT_BYTES: usize = 32;
+
+/// A provider `model` is one model name — an alias or a fully qualified ID —
+/// passed as a single argv value (issue #7). The character set is deliberately
+/// *not* narrowed to a known list: new model IDs must not require an edit to
+/// this deserialization schema before an operator can name one. What is
+/// checked is only what makes a value unusable or unsafe as a lone argv
+/// element.
+pub fn validate_model(value: &str) -> Result<(), AppError> {
+    if value.is_empty() {
+        return Err(config_invalid("provider model must not be empty"));
+    }
+    if value.len() > MAX_MODEL_BYTES {
+        return Err(config_invalid(format!(
+            "provider model must not exceed {MAX_MODEL_BYTES} bytes"
+        )));
+    }
+    if value.chars().any(|c| c.is_control()) {
+        return Err(config_invalid(
+            "provider model must not contain control characters",
+        ));
+    }
+    if value.chars().any(|c| c.is_whitespace()) {
+        return Err(config_invalid(
+            "provider model must be one model name, not arguments",
+        ));
+    }
+    // A leading `-` is the one shape that would read as a flag rather than a
+    // value to the provider CLI's own parser, even though it reaches that
+    // parser as a separate argv element.
+    if value.starts_with('-') {
+        return Err(config_invalid("provider model must not start with '-'"));
+    }
+    Ok(())
+}
+
+/// A provider `effort` is one short, safe token (issue #7). Which levels a
+/// given provider/model actually supports is deliberately left to the provider
+/// CLI: an unsupported level comes back as an ordinary provider failure, so a
+/// newly published level works here without a schema change.
+pub fn validate_effort(value: &str) -> Result<(), AppError> {
+    if value.is_empty() {
+        return Err(config_invalid("provider effort must not be empty"));
+    }
+    if value.len() > MAX_EFFORT_BYTES {
+        return Err(config_invalid(format!(
+            "provider effort must not exceed {MAX_EFFORT_BYTES} bytes"
+        )));
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(config_invalid(
+            "provider effort must contain only letters, digits, '_', and '-'",
+        ));
+    }
+    if !value.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+        return Err(config_invalid(
+            "provider effort must start with a letter or digit",
         ));
     }
     Ok(())
@@ -1020,9 +1174,21 @@ default_agent = "claude"
 
 [providers.claude]
 executable = "claude"
+# Optional. Leave unset to use whatever the provider CLI picks by default.
+# model  = "opus"
+# effort = "high"
 
 [providers.codex]
 executable = "codex"
+# model  = "gpt-5.6-sol"
+# effort = "high"
+
+# Terminal rendering for `query`. "leaf" (the default) renders through the
+# external `leaf --inline` viewer; "plain" prints raw markdown. Piped output,
+# --json, --plain and NO_COLOR always print raw markdown regardless.
+[viewer]
+backend = "leaf"
+# executable = 'C:\Tools\leaf\leaf.exe'
 
 [runtime]
 timeout_seconds    = 180
@@ -1032,10 +1198,18 @@ max_stderr_bytes   = 65536
 
 # Example wiki (edit the paths and prompt, then uncomment to register it):
 #
+# Windows paths: `\` is an escape character inside TOML's double-quoted
+# strings, so a path like C:\Wikis\example must be spelled one of three
+# ways: a single-quoted literal string ('C:\Wikis\example', no escaping at
+# all), a double-quoted string with doubled backslashes
+# ("C:\\Wikis\\example"), or forward slashes ("C:/Wikis/example", which
+# Windows also accepts). This template uses single-quoted literal strings
+# below.
+#
 # [wikis.example]
 # title        = "Example Knowledge Base"
-# project_root = "/absolute/path/to/example"
-# content_root = "/absolute/path/to/example"
+# project_root = '/absolute/path/to/example'
+# content_root = '/absolute/path/to/example'
 # agents       = ["claude"]
 # query_prompt = "Use the wiki-query skill to answer from this wiki."
 #
@@ -1044,6 +1218,75 @@ max_stderr_bytes   = 65536
 # entrypoint = "/wiki-query"
 # skill_path = ".claude/skills/wiki-query/SKILL.md"
 "#;
+
+/// Renders the `config init` starter document with the wizard's three
+/// answers substituted in (PRD 08-08-pre-0-1-0-cli-skills-markdown-init D4,
+/// design.md §2.3). `render_init_template(Some(Agent::Claude), "claude",
+/// "codex")` must equal [`INIT_TEMPLATE`] byte-for-byte — pinned by
+/// `tests/config_contract.rs`. Wiki registration deliberately stays out of
+/// this function's parameters (F9): the commented example wiki block below
+/// is always emitted unchanged.
+pub fn render_init_template(
+    default_agent: Option<Agent>,
+    claude_executable: &str,
+    codex_executable: &str,
+) -> String {
+    let default_agent_line = match default_agent {
+        Some(Agent::Claude) => "default_agent = \"claude\"\n".to_string(),
+        Some(Agent::Codex) => "default_agent = \"codex\"\n".to_string(),
+        None => String::new(),
+    };
+    format!(
+        r#"config_version = 1
+{default_agent_line}
+[providers.claude]
+executable = "{claude_executable}"
+# Optional. Leave unset to use whatever the provider CLI picks by default.
+# model  = "opus"
+# effort = "high"
+
+[providers.codex]
+executable = "{codex_executable}"
+# model  = "gpt-5.6-sol"
+# effort = "high"
+
+# Terminal rendering for `query`. "leaf" (the default) renders through the
+# external `leaf --inline` viewer; "plain" prints raw markdown. Piped output,
+# --json, --plain and NO_COLOR always print raw markdown regardless.
+[viewer]
+backend = "leaf"
+# executable = 'C:\Tools\leaf\leaf.exe'
+
+[runtime]
+timeout_seconds    = 180
+max_question_bytes = 65536
+max_stdout_bytes   = 1048576
+max_stderr_bytes   = 65536
+
+# Example wiki (edit the paths and prompt, then uncomment to register it):
+#
+# Windows paths: `\` is an escape character inside TOML's double-quoted
+# strings, so a path like C:\Wikis\example must be spelled one of three
+# ways: a single-quoted literal string ('C:\Wikis\example', no escaping at
+# all), a double-quoted string with doubled backslashes
+# ("C:\\Wikis\\example"), or forward slashes ("C:/Wikis/example", which
+# Windows also accepts). This template uses single-quoted literal strings
+# below.
+#
+# [wikis.example]
+# title        = "Example Knowledge Base"
+# project_root = '/absolute/path/to/example'
+# content_root = '/absolute/path/to/example'
+# agents       = ["claude"]
+# query_prompt = "Use the wiki-query skill to answer from this wiki."
+#
+# [wikis.example.claude]
+# load       = "project_skill"
+# entrypoint = "/wiki-query"
+# skill_path = ".claude/skills/wiki-query/SKILL.md"
+"#
+    )
+}
 
 /// Result of a `config init` attempt (path always known; `created` only true on
 /// an actual exclusive-create write).
@@ -1056,13 +1299,36 @@ pub struct ConfigInitOutcome {
 /// Exclusive-create only: never overwrites, never merges, never reads the
 /// caller's current working directory for discovery.
 pub fn init(path: &Path) -> Result<ConfigInitOutcome, AppError> {
+    init_with_content(path, INIT_TEMPLATE, false)
+}
+
+/// The shared write path behind [`init`] and the CLI's wizard/`--force`
+/// flows (design.md §2.3). `force: false` keeps today's exclusive-create
+/// semantics (`init`'s own contract, unchanged); `force: true` truncates
+/// and overwrites an existing file instead of failing with
+/// `CONFIG_EXISTS` -- the only overwrite path in this codebase (PRD
+/// 08-08-pre-0-1-0-cli-skills-markdown-init D4: `--force` is the sole
+/// consent to overwrite; a TTY-confirmed overwrite calls this the same way
+/// after the caller's own `Confirm` returns `true`).
+pub fn init_with_content(
+    path: &Path,
+    content: &str,
+    force: bool,
+) -> Result<ConfigInitOutcome, AppError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| config_invalid(format!("cannot create configuration directory: {e}")))?;
     }
-    match OpenOptions::new().write(true).create_new(true).open(path) {
+    let mut open_options = OpenOptions::new();
+    open_options.write(true);
+    if force {
+        open_options.truncate(true).create(true);
+    } else {
+        open_options.create_new(true);
+    }
+    match open_options.open(path) {
         Ok(mut file) => {
-            file.write_all(INIT_TEMPLATE.as_bytes())
+            file.write_all(content.as_bytes())
                 .map_err(|e| config_invalid(format!("cannot write configuration file: {e}")))?;
             Ok(ConfigInitOutcome {
                 path: path.to_path_buf(),
@@ -1109,5 +1375,116 @@ pub fn init_envelope(path: &Path) -> ConfigInitEnvelope {
             created: false,
             error: Some(err),
         },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `config list` / `config validate` (PRD 08-06-pre-0-1-0-cli-refinements
+// AC1; the subcommand itself was renamed from `show` to `list` per D7,
+// after round 1 landed -- the envelope type/constructor names and the
+// `operation` string below follow that rename so all three stay in sync).
+// Both reuse `Config::load` exactly the way `run_list_command`
+// (`src/cli.rs`) already does for the top-level `list` -- no new
+// path-resolution or validation logic. Neither introduces a new
+// `ErrorCode`: every failure here is a `Config::load` failure already
+// mapped by the existing scheme. Not to be confused with `ListEnvelope`
+// (`src/doctor.rs`), which lists registered *wikis* rather than the
+// resolved configuration document itself.
+// ---------------------------------------------------------------------------
+
+/// `config list`'s success/failure envelope. "Resolved configuration" means
+/// the parsed `Config` after serde's own field-level defaulting -- exactly
+/// what `Config::load` already produces -- never additionally
+/// filesystem-canonicalized per wiki (that stays `resolve_wiki_roots`'s job,
+/// already owned by `doctor`/`query`). Doctor is unchanged by this task.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigListEnvelope {
+    pub schema_version: &'static str,
+    pub ok: bool,
+    pub operation: &'static str,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<Config>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<AppError>,
+}
+
+/// Builds the `config list` envelope for an already-resolved config path.
+pub fn config_list_envelope(path: &Path) -> ConfigListEnvelope {
+    match Config::load(path) {
+        Ok(config) => ConfigListEnvelope {
+            schema_version: SCHEMA_VERSION,
+            ok: true,
+            operation: "config_list",
+            path: path.display().to_string(),
+            config: Some(config),
+            error: None,
+        },
+        Err(err) => ConfigListEnvelope {
+            schema_version: SCHEMA_VERSION,
+            ok: false,
+            operation: "config_list",
+            path: path.display().to_string(),
+            config: None,
+            error: Some(err),
+        },
+    }
+}
+
+/// Used only when the config *path itself* could not even be resolved
+/// (relative `--config` override, unresolvable platform default) --
+/// mirrors `list_error_envelope`'s role for the top-level `list`
+/// (`src/doctor.rs`).
+pub fn config_list_error_envelope(err: AppError) -> ConfigListEnvelope {
+    ConfigListEnvelope {
+        schema_version: SCHEMA_VERSION,
+        ok: false,
+        operation: "config_list",
+        path: String::new(),
+        config: None,
+        error: Some(err),
+    }
+}
+
+/// `config validate`'s success/failure envelope: the same `Config::load`
+/// outcome as [`ConfigListEnvelope`], minus the parsed document itself --
+/// AC1 asks only for "ok/errors without side effects," not an echo of the
+/// resolved configuration back to the caller.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigValidateEnvelope {
+    pub schema_version: &'static str,
+    pub ok: bool,
+    pub operation: &'static str,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<AppError>,
+}
+
+pub fn config_validate_envelope(path: &Path) -> ConfigValidateEnvelope {
+    match Config::load(path) {
+        Ok(_) => ConfigValidateEnvelope {
+            schema_version: SCHEMA_VERSION,
+            ok: true,
+            operation: "config_validate",
+            path: path.display().to_string(),
+            error: None,
+        },
+        Err(err) => ConfigValidateEnvelope {
+            schema_version: SCHEMA_VERSION,
+            ok: false,
+            operation: "config_validate",
+            path: path.display().to_string(),
+            error: Some(err),
+        },
+    }
+}
+
+pub fn config_validate_error_envelope(err: AppError) -> ConfigValidateEnvelope {
+    ConfigValidateEnvelope {
+        schema_version: SCHEMA_VERSION,
+        ok: false,
+        operation: "config_validate",
+        path: String::new(),
+        error: Some(err),
     }
 }

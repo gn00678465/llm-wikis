@@ -1,0 +1,20 @@
+{
+  "id": "08-07-first-run-config-and-query-ux-fixes",
+  "title": "first-run config and query UX fixes",
+  "status": "completed",
+  "complexity": "light",
+  "created": "2026-08-07T05:20:21.494Z",
+  "developer": "Madao",
+  "rounds": {
+    "evaluate": 2,
+    "rollback": 0,
+    "baseline": [
+      ".trestle/tasks/08-07-first-run-config-and-query-ux-fixes/check.jsonl",
+      ".trestle/tasks/08-07-first-run-config-and-query-ux-fixes/implement.jsonl",
+      ".trestle/tasks/08-07-first-run-config-and-query-ux-fixes/prd.md",
+      ".trestle/tasks/08-07-first-run-config-and-query-ux-fixes/task.json"
+    ],
+    "implemented": 2
+  },
+  "deferrals": []
+}

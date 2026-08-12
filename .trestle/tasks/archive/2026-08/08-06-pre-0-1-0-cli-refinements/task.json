@@ -1,0 +1,36 @@
+{
+  "id": "08-06-pre-0-1-0-cli-refinements",
+  "title": "pre-0.1.0 CLI refinements",
+  "status": "completed",
+  "complexity": "complex",
+  "created": "2026-08-06T12:26:36.636Z",
+  "developer": "Madao",
+  "rounds": {
+    "evaluate": 3,
+    "rollback": 0,
+    "baseline": [
+      ".gitignore",
+      "AGENTS.md",
+      "docs/agents/domain.md",
+      "docs/agents/issue-tracker.md",
+      "docs/agents/triage-labels.md",
+      ".trestle/.gitignore",
+      ".trestle/checklist/global.md",
+      ".trestle/config.json",
+      ".trestle/tasks/08-06-pre-0-1-0-cli-refinements/check.jsonl",
+      ".trestle/tasks/08-06-pre-0-1-0-cli-refinements/checklist.md",
+      ".trestle/tasks/08-06-pre-0-1-0-cli-refinements/design.md",
+      ".trestle/tasks/08-06-pre-0-1-0-cli-refinements/implement.jsonl",
+      ".trestle/tasks/08-06-pre-0-1-0-cli-refinements/implement.md",
+      ".trestle/tasks/08-06-pre-0-1-0-cli-refinements/prd.md",
+      ".trestle/tasks/08-06-pre-0-1-0-cli-refinements/research/provider-cli-flags.md",
+      ".trestle/tasks/08-06-pre-0-1-0-cli-refinements/task.json",
+      ".trestle/workflow.md",
+      ".trestle/workspace/ARCHITECTURE.md",
+      ".trestle/workspace/Madao/index.md",
+      ".trestle/workspace/PRODUCT.md"
+    ],
+    "implemented": 3
+  },
+  "deferrals": []
+}

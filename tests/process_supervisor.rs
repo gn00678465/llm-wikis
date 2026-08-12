@@ -641,6 +641,32 @@ fn batch_shim_boundary() {
     }
 }
 
+// Issue #7: the Codex effort override is the first argv element this wrapper
+// sends whose *value* contains double quotes
+// (`model_reasoning_effort="high"`). Quotes are the one metacharacter class
+// `spaces_and_metachars` above does not cover, and they are precisely what
+// Windows' argv encoding uses as its own delimiter — so this proves the
+// override survives the `.cmd` shim path intact rather than assuming it does
+// from the argv unit tests, which never spawn anything.
+#[cfg(windows)]
+#[test]
+fn batch_shim_preserves_quoted_config_override_argument() {
+    let dir = tempfile::Builder::new()
+        .prefix("quote test ")
+        .tempdir()
+        .unwrap();
+    let override_arg = r#"model_reasoning_effort="high""#;
+    let lines = run_shim(dir.path(), 2, &["-c", override_arg], b"");
+
+    assert_eq!(lines[0], "ARG0=[-c]");
+    assert_eq!(lines[1], format!("ARG1=[{override_arg}]"));
+    assert_eq!(
+        lines.len(),
+        3,
+        "expected exactly two forwarded args + STDIN_LEN, got {lines:?}"
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn spaces_and_metachars() {
@@ -720,6 +746,152 @@ fn resolve_executable_classifies_cmd_extension_as_batch_shim() {
     let resolved =
         resolve_executable(&cmd_path.display().to_string(), &ProcessEnv).expect("should resolve");
     assert_eq!(resolved.kind, ExecutableKind::BatchShim);
+}
+
+// Issue #6: npm-installed provider CLIs on Windows drop an extensionless POSIX
+// shim next to the real `.cmd` launcher. Resolving the bare name must follow
+// Windows' own PATHEXT semantics and select the `.cmd`, not the shim (which
+// Windows cannot start as a Win32 image: os error 193).
+#[cfg(windows)]
+fn write_npm_style_install(dir: &Path, name: &str) {
+    std::fs::write(dir.join(name), "#!/bin/sh\nexec node cli.js \"$@\"\n").unwrap();
+    std::fs::write(dir.join(format!("{name}.cmd")), "@echo off\r\n").unwrap();
+    std::fs::write(dir.join(format!("{name}.ps1")), "#!/usr/bin/env pwsh\r\n").unwrap();
+}
+
+#[cfg(windows)]
+fn path_env(dirs: &[&Path]) -> MapEnv {
+    let joined = dirs
+        .iter()
+        .map(|d| d.display().to_string())
+        .collect::<Vec<_>>()
+        .join(";");
+    MapEnv(std::collections::HashMap::from([(
+        "PATH".to_string(),
+        joined,
+    )]))
+}
+
+#[cfg(windows)]
+#[test]
+fn resolve_executable_prefers_pathext_over_extensionless_posix_shim() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_npm_style_install(tmp.path(), "codex");
+
+    let resolved = resolve_executable("codex", &path_env(&[tmp.path()])).expect("should resolve");
+
+    assert_eq!(
+        resolved.path,
+        std::fs::canonicalize(tmp.path().join("codex.cmd")).unwrap()
+    );
+    assert_eq!(resolved.kind, ExecutableKind::BatchShim);
+}
+
+// The PATHEXT sweep runs across every PATH entry before any extensionless
+// candidate is considered, so a shim earlier on PATH never shadows a real
+// launcher later on it.
+#[cfg(windows)]
+#[test]
+fn resolve_executable_prefers_later_pathext_match_over_earlier_extensionless() {
+    let shim_dir = tempfile::tempdir().unwrap();
+    let real_dir = tempfile::tempdir().unwrap();
+    std::fs::write(shim_dir.path().join("codex"), "#!/bin/sh\n").unwrap();
+    std::fs::write(real_dir.path().join("codex.cmd"), "@echo off\r\n").unwrap();
+
+    let resolved = resolve_executable("codex", &path_env(&[shim_dir.path(), real_dir.path()]))
+        .expect("should resolve");
+
+    assert_eq!(
+        resolved.path,
+        std::fs::canonicalize(real_dir.path().join("codex.cmd")).unwrap()
+    );
+    assert_eq!(resolved.kind, ExecutableKind::BatchShim);
+}
+
+// An extensionless file is still resolvable — it is the last resort, not a
+// rejected shape.
+#[cfg(windows)]
+#[test]
+fn resolve_executable_falls_back_to_extensionless_when_no_pathext_match() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("codex"), "#!/bin/sh\n").unwrap();
+
+    let resolved = resolve_executable("codex", &path_env(&[tmp.path()])).expect("should resolve");
+
+    assert_eq!(
+        resolved.path,
+        std::fs::canonicalize(tmp.path().join("codex")).unwrap()
+    );
+    assert_eq!(resolved.kind, ExecutableKind::Native);
+}
+
+// PATHEXT comes from the environment, in the order the environment lists it;
+// the built-in list is only a fallback for when the variable is absent.
+#[cfg(windows)]
+#[test]
+fn resolve_executable_honours_environment_pathext_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("codex.bat"), "@echo off\r\n").unwrap();
+    std::fs::write(tmp.path().join("codex.cmd"), "@echo off\r\n").unwrap();
+
+    let env = MapEnv(std::collections::HashMap::from([
+        ("PATH".to_string(), tmp.path().display().to_string()),
+        ("PATHEXT".to_string(), ".CMD;.BAT".to_string()),
+    ]));
+    let resolved = resolve_executable("codex", &env).expect("should resolve");
+    assert_eq!(
+        resolved.path,
+        std::fs::canonicalize(tmp.path().join("codex.cmd")).unwrap()
+    );
+
+    let env = MapEnv(std::collections::HashMap::from([
+        ("PATH".to_string(), tmp.path().display().to_string()),
+        ("PATHEXT".to_string(), ".BAT;.CMD".to_string()),
+    ]));
+    let resolved = resolve_executable("codex", &env).expect("should resolve");
+    assert_eq!(
+        resolved.path,
+        std::fs::canonicalize(tmp.path().join("codex.bat")).unwrap()
+    );
+}
+
+// A real PATHEXT carries suffixes cmd.exe launches through a file association
+// (.PS1, .VBS, .JS). Spawning without a shell cannot, and an npm install puts
+// `codex.ps1` right next to `codex.cmd` — picking the .ps1 would be the same
+// os error 193 under a different extension.
+#[cfg(windows)]
+#[test]
+fn resolve_executable_skips_pathext_entries_it_cannot_spawn() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_npm_style_install(tmp.path(), "codex");
+
+    let env = MapEnv(std::collections::HashMap::from([
+        ("PATH".to_string(), tmp.path().display().to_string()),
+        ("PATHEXT".to_string(), ".PS1;.VBS;.CMD".to_string()),
+    ]));
+    let resolved = resolve_executable("codex", &env).expect("should resolve");
+
+    assert_eq!(
+        resolved.path,
+        std::fs::canonicalize(tmp.path().join("codex.cmd")).unwrap()
+    );
+    assert_eq!(resolved.kind, ExecutableKind::BatchShim);
+}
+
+// An explicitly configured absolute path is never re-resolved through PATHEXT:
+// `executable = "...\codex"` keeps pointing at that exact file.
+#[cfg(windows)]
+#[test]
+fn resolve_executable_absolute_path_ignores_pathext_siblings() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_npm_style_install(tmp.path(), "codex");
+
+    let shim = tmp.path().join("codex");
+    let resolved =
+        resolve_executable(&shim.display().to_string(), &ProcessEnv).expect("should resolve");
+
+    assert_eq!(resolved.path, std::fs::canonicalize(&shim).unwrap());
+    assert_eq!(resolved.kind, ExecutableKind::Native);
 }
 
 // ---------------------------------------------------------------------------

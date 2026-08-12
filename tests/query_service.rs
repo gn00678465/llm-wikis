@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use llm_wikis::config::{
     Config, LoadMode, ProviderConfig, ProviderWikiConfig, ProvidersConfig, RuntimeConfig,
-    WikiConfig,
+    ViewerBackend, ViewerConfig, WikiConfig,
 };
 use llm_wikis::error::{AppError, ErrorCode};
 use llm_wikis::output::Agent;
@@ -142,6 +142,8 @@ fn build_config(fixture: &Fixture, agent: Agent) -> Config {
 
     let provider_cfg = Some(ProviderConfig {
         executable: Some(fixture.executable_path.display().to_string()),
+        model: None,
+        effort: None,
     });
     let mut providers = ProvidersConfig {
         claude: None,
@@ -157,6 +159,12 @@ fn build_config(fixture: &Fixture, agent: Agent) -> Config {
         default_agent: Some(agent),
         providers,
         runtime: RuntimeConfig::default(),
+        // Explicitly plain: these fixtures must not reach out to a real
+        // viewer binary on the host running the tests.
+        viewer: ViewerConfig {
+            backend: ViewerBackend::Plain,
+            executable: None,
+        },
         wikis,
     }
 }
@@ -259,6 +267,8 @@ fn matching_probe_record(fixture: &Fixture, config: &Config, agent: Agent) -> Pr
             skill_path: provider_table.skill_path.as_deref(),
             plugin_dir: provider_table.plugin_dir.as_deref(),
             executable_declaration: &executable_declaration,
+            model_declaration: None,
+            effort_declaration: None,
             provider_contract_version: PROVIDER_CONTRACT_VERSION,
         });
     ProbeRecord {
@@ -820,6 +830,16 @@ fn probe_gate_enforced_mode_absent_record() {
     let err = envelope.error.unwrap();
     assert_eq!(err.code, ErrorCode::EntrypointUnverified);
     assert_eq!(err.code.exit_code(), 3);
+    // PRD 08-07-first-run-config-and-query-ux-fixes D5/AC4: the message
+    // names the remedial command, with the real wiki/agent selectors (both
+    // are already in scope at every gate-failure call site).
+    assert!(
+        err.message.contains(&format!(
+            "llm-wikis doctor --wiki {WIKI_ID} --agent claude --live"
+        )),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
@@ -846,9 +866,14 @@ fn probe_gate_enforced_mode_mismatched_record() {
         .expect("Ok envelope");
 
     assert!(!envelope.ok);
-    assert_eq!(
-        envelope.error.unwrap().code,
-        ErrorCode::EntrypointUnverified
+    let err = envelope.error.unwrap();
+    assert_eq!(err.code, ErrorCode::EntrypointUnverified);
+    assert!(
+        err.message.contains(&format!(
+            "llm-wikis doctor --wiki {WIKI_ID} --agent claude --live"
+        )),
+        "{}",
+        err.message
     );
 }
 

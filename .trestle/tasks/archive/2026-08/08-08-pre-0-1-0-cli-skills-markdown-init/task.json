@@ -1,0 +1,26 @@
+{
+  "id": "08-08-pre-0-1-0-cli-skills-markdown-init",
+  "title": "pre-0.1.0 CLI 強化：skills 目錄、markdown 終端渲染、init 防覆寫與互動設定",
+  "status": "completed",
+  "complexity": "complex",
+  "created": "2026-08-07T20:47:12.813Z",
+  "developer": "Madao",
+  "rounds": {
+    "evaluate": 3,
+    "rollback": 0,
+    "baseline": [
+      ".trestle/tasks/08-08-pre-0-1-0-cli-skills-markdown-init/check.jsonl",
+      ".trestle/tasks/08-08-pre-0-1-0-cli-skills-markdown-init/checklist.md",
+      ".trestle/tasks/08-08-pre-0-1-0-cli-skills-markdown-init/design.md",
+      ".trestle/tasks/08-08-pre-0-1-0-cli-skills-markdown-init/implement.jsonl",
+      ".trestle/tasks/08-08-pre-0-1-0-cli-skills-markdown-init/implement.md",
+      ".trestle/tasks/08-08-pre-0-1-0-cli-skills-markdown-init/prd.md",
+      ".trestle/tasks/08-08-pre-0-1-0-cli-skills-markdown-init/research/init-interactive.md",
+      ".trestle/tasks/08-08-pre-0-1-0-cli-skills-markdown-init/research/markdown-rendering.md",
+      ".trestle/tasks/08-08-pre-0-1-0-cli-skills-markdown-init/research/skills-directory.md",
+      ".trestle/tasks/08-08-pre-0-1-0-cli-skills-markdown-init/task.json"
+    ],
+    "implemented": 3
+  },
+  "deferrals": []
+}

@@ -1,0 +1,312 @@
+{
+  "taskName": "08-08-pre-0-1-0-cli-skills-markdown-init",
+  "round": 1,
+  "verdict": "block",
+  "gates": [
+    {
+      "id": "AC1",
+      "category": "ac",
+      "ok": false,
+      "detail": "not checked: AC1: repo root 存在 `skills/llm-wikis-usage/SKILL.md`（frontmatter 僅含 name 與 description）與 references 錯誤碼文件；內容涵蓋 query/doctor/list/config 用法、JSON envelope 與 exit code 對照、錯誤排查入口；README 含安裝說明段。"
+    },
+    {
+      "id": "AC2",
+      "category": "ac",
+      "ok": false,
+      "detail": "not checked: AC2: `query` 人類模式在 stdout 為 TTY、NO_COLOR 未設、未帶 --plain 時以 termimad 渲染 markdown；被 pipe/redirect、帶 --plain、或 NO_COLOR 有值時輸出 原始 markdown 與現狀 byte-for-byte 一致；--json 路徑完全不變。"
+    },
+    {
+      "id": "AC3",
+      "category": "ac",
+      "ok": false,
+      "detail": "not checked: AC3: `config init` 在 TTY 且未帶 --yes 時自動進入互動精靈（default_agent Select、provider executable Text、Enter 採預設）；--yes 或非 TTY 或 --json 時 寫樣板（與現狀一致）；產出的 config 通過 `config validate`。"
+    },
+    {
+      "id": "AC4",
+      "category": "ac",
+      "ok": false,
+      "detail": "not checked: AC4: `config init` 遇既存檔案：TTY 且無 --force 時 Confirm 確認（預設 No， 拒絕即維持 CONFIG_EXISTS exit 2）；非 TTY 且無 --force 維持 CONFIG_EXISTS； 帶 --force 直接覆寫。--json envelope 形狀不變。"
+    },
+    {
+      "id": "AC5",
+      "category": "ac",
+      "ok": false,
+      "detail": "not checked: AC5: 規格文件（design 文件與 operator 指南）同步修訂 wizard/覆寫/渲染相關 段落，`cargo test` 全綠（含 spec_drift）。"
+    },
+    {
+      "id": "verify-1",
+      "category": "verification",
+      "ok": true,
+      "detail": "passed: cargo build --all-targets --all-features"
+    },
+    {
+      "id": "verify-2",
+      "category": "verification",
+      "ok": true,
+      "detail": "passed: cargo fmt --all --check"
+    },
+    {
+      "id": "verify-3",
+      "category": "verification",
+      "ok": true,
+      "detail": "passed: cargo clippy --all-targets --all-features -- -D warnings"
+    },
+    {
+      "id": "verify-4",
+      "category": "verification",
+      "ok": false,
+      "detail": "exit 101: cargo test --all-targets --all-features -- --test-threads=1"
+    },
+    {
+      "id": "scope-Cargo.lock",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: Cargo.lock"
+    },
+    {
+      "id": "scope-Cargo.toml",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: Cargo.toml"
+    },
+    {
+      "id": "scope-README.md",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: README.md"
+    },
+    {
+      "id": "scope-docs/2026-07-28-llm-wikis-external-query-design.md",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: docs/2026-07-28-llm-wikis-external-query-design.md"
+    },
+    {
+      "id": "scope-docs/llm-wikis.md",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: docs/llm-wikis.md"
+    },
+    {
+      "id": "scope-src/cli.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: src/cli.rs"
+    },
+    {
+      "id": "scope-src/config.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: src/config.rs"
+    },
+    {
+      "id": "scope-src/output.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: src/output.rs"
+    },
+    {
+      "id": "scope-tests/cli_contract.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: tests/cli_contract.rs"
+    },
+    {
+      "id": "scope-tests/config_contract.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: tests/config_contract.rs"
+    },
+    {
+      "id": "scope-tests/output_contract.rs",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: tests/output_contract.rs"
+    },
+    {
+      "id": "scope-skills/llm-wikis-usage/SKILL.md",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: skills/llm-wikis-usage/SKILL.md"
+    },
+    {
+      "id": "scope-skills/llm-wikis-usage/references/errors.md",
+      "category": "scope",
+      "ok": true,
+      "detail": "in scope: skills/llm-wikis-usage/references/errors.md"
+    },
+    {
+      "id": "DC1",
+      "category": "deferral",
+      "ok": true,
+      "detail": "proving check passed, approved-by user (2026-08-08)"
+    },
+    {
+      "id": "G1",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo build --all-targets --all-features"
+    },
+    {
+      "id": "G2",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo fmt --all --check"
+    },
+    {
+      "id": "G3",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo clippy --all-targets --all-features -- -D warnings"
+    },
+    {
+      "id": "G4",
+      "category": "custom",
+      "ok": false,
+      "detail": "exit 101: cargo test --all-targets --all-features -- --test-threads=1"
+    },
+    {
+      "id": "G5",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo test --test config_init -- --test-threads=1"
+    },
+    {
+      "id": "G6",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo test --test cli_contract -- --test-threads=1"
+    },
+    {
+      "id": "G7",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: cargo test --test spec_drift -- --test-threads=1"
+    },
+    {
+      "id": "G8",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"termimad\" Cargo.toml"
+    },
+    {
+      "id": "G9",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"dialoguer\" Cargo.toml"
+    },
+    {
+      "id": "G10",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -n \"^name:\" skills/llm-wikis-usage/SKILL.md"
+    },
+    {
+      "id": "G11",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -n \"^description:\" skills/llm-wikis-usage/SKILL.md"
+    },
+    {
+      "id": "G13",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -l \"\" skills/llm-wikis-usage/references/errors.md"
+    },
+    {
+      "id": "G14",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"plain: bool\" src/cli.rs"
+    },
+    {
+      "id": "G15",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"yes: bool\" src/cli.rs"
+    },
+    {
+      "id": "G16",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"force: bool\" src/cli.rs"
+    },
+    {
+      "id": "G17",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"pub fn init(path: &Path) -> Result<ConfigInitOutcome, AppError>\" src/config.rs"
+    },
+    {
+      "id": "G18",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -F \"pub fn init_envelope(path: &Path) -> ConfigInitEnvelope\" src/config.rs"
+    },
+    {
+      "id": "G19",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -n -- \"--force\" docs/2026-07-28-llm-wikis-external-query-design.md"
+    },
+    {
+      "id": "G20",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -n -- \"--yes\" docs/2026-07-28-llm-wikis-external-query-design.md"
+    },
+    {
+      "id": "G21",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -n -- \"--plain\" docs/2026-07-28-llm-wikis-external-query-design.md"
+    },
+    {
+      "id": "G22",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -n -- \"--force\" docs/llm-wikis.md"
+    },
+    {
+      "id": "G23",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -n -- \"--plain\" docs/llm-wikis.md"
+    },
+    {
+      "id": "G24",
+      "category": "custom",
+      "ok": true,
+      "detail": "passed: rg -n \"llm-wikis-usage\" README.md"
+    },
+    {
+      "id": "trace-audit",
+      "category": "audit",
+      "ok": false,
+      "detail": "trace.ts audit found 1 violation(s) — suspicious-trace-start: trace's first event (\"archive-verdict-waived\" at 2026-08-07T13:31:24.187Z) is neither a preamble-bearing session-start nor a trace-rotated event, while task lifecycle events are present in the file — possible unsanctioned trace edit or replacement"
+    }
+  ],
+  "manual": [
+    {
+      "id": "G25",
+      "check": "The line-141 JSON-envelope sentence in `docs/2026-07-28-llm-wikis-external-query-design.md` (`{ \"schema_version\": \"1.0\", \"ok\": true, \"operation\": \"config_init\", \"path\": \"<absolute config path>\", \"created\": true }`) is byte-identical to today's wording — no new field added for the wizard/overwrite behavior (design.md §4, F10/D4). Evaluator reads that line directly."
+    },
+    {
+      "id": "G26",
+      "check": "`docs/2026-07-28-llm-wikis-external-query-design.md`'s §3.2 Explicitly Out of Scope no longer lists \"an interactive configuration wizard\" verbatim as a bare bullet (it directly contradicted the shipped TTY-triggered wizard) — evaluator confirms the sentence was reworded to the narrower, still-true `config add-wiki`-focused boundary (design.md §4) rather than merely deleted or left contradicting the code."
+    },
+    {
+      "id": "G27",
+      "check": "Manual: the four TTY-rendering scenarios from `implement.md` Step 2.6 (real-terminal rendered output, piped raw output, `--plain` raw output in a TTY, `NO_COLOR=1` raw output in a TTY) were each run once against a real registered wiki and matched the expected raw/rendered split in design.md §1.2's matrix. Evaluator asks for the transcript or a recorded confirmation of each of the four runs; never auto-passed."
+    },
+    {
+      "id": "G28",
+      "check": "Manual: the four TTY-wizard/overwrite scenarios from `implement.md` Step 3.6 (accept-all-defaults wizard write, decline overwrite leaves file untouched at exit 2, accept overwrite re-runs the wizard, `--force` with piped stdout shows no prompt) were each run once in a real terminal and matched design.md §2.2's matrix. Evaluator asks for the transcript or a recorded confirmation of each of the four runs; never auto-passed."
+    },
+    {
+      "id": "G29",
+      "check": "`skills/llm-wikis-usage/SKILL.md`'s command-grammar/flag content matches the CLI surface actually shipped by this task (including `--plain`, `--yes`, `--force`) rather than the pre-task surface — evaluator diffs the skill's command examples against `src/cli.rs`'s final `Cli`/`CliCommand`/`ConfigAction` definitions."
+    }
+  ],
+  "rerun": true
+}

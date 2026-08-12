@@ -24,8 +24,10 @@ use clap::error::ErrorKind;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::config::{
-    Config, ConfigInitEnvelope, Platform, ProcessEnv, default_cache_path, default_config_path,
-    init_envelope, validate_config_override,
+    Config, ConfigInitEnvelope, ConfigInitOutcome, ConfigListEnvelope, ConfigValidateEnvelope,
+    INIT_TEMPLATE, Platform, ProcessEnv, config_list_envelope, config_list_error_envelope,
+    config_validate_envelope, config_validate_error_envelope, default_cache_path,
+    default_config_path, init, init_with_content, render_init_template, validate_config_override,
 };
 use crate::doctor::{
     CheckStatus, DoctorEnvelope, DoctorRequest, ListEnvelope, doctor_error_envelope,
@@ -44,8 +46,9 @@ use crate::query::{QueryRequest, QueryService};
 #[derive(Parser)]
 #[command(name = "llm-wikis", version)]
 struct Cli {
-    /// Absolute-only override for the platform-native config path (spec
-    /// §5.2). Rejected (as `ARGUMENT_INVALID`) when relative.
+    /// Absolute path to the configuration file (overrides the platform default).
+    // Absolute-only override for the platform-native config path (spec
+    // §5.2). Rejected (as `ARGUMENT_INVALID`) when relative.
     #[arg(long, global = true, value_name = "PATH")]
     config: Option<PathBuf>,
     /// Emit exactly one JSON document instead of human-readable text.
@@ -71,19 +74,26 @@ enum CliCommand {
         live: bool,
     },
     Query {
-        /// Collected via `ArgAction::Append` (never silently overwritten by a
-        /// repeat) so a repeated `--wiki` is *detectable* after parsing,
-        /// rather than clap's default single-value behavior of quietly
-        /// keeping only the last occurrence (spec §5.1: "accepts one and
-        /// only one `--wiki`. Repeating it ... is an argument error").
+        /// The wiki ID to query (required, exactly one).
+        // Collected via `ArgAction::Append` (never silently overwritten by a
+        // repeat) so a repeated `--wiki` is *detectable* after parsing,
+        // rather than clap's default single-value behavior of quietly
+        // keeping only the last occurrence (spec §5.1: "accepts one and
+        // only one `--wiki`. Repeating it ... is an argument error").
         #[arg(long = "wiki", action = clap::ArgAction::Append, value_name = "ID")]
         wiki: Vec<String>,
         #[arg(long)]
         agent: Option<AgentArg>,
-        /// The question, supplied only after a literal `--` (spec §5.1).
-        /// `last = true` is what makes clap require that separator at all —
-        /// without it this would just be an ordinary (and, without `--`,
-        /// earlier-consumed) positional.
+        /// Print the raw markdown answer instead of terminal-rendered styling.
+        // PRD 08-08-pre-0-1-0-cli-skills-markdown-init D3: forces the raw
+        // path even on a TTY; independent of `NO_COLOR`/piped-output
+        // detection, which already force raw on their own (design.md §1.2).
+        #[arg(long)]
+        plain: bool,
+        /// The question text, supplied after a literal `--` separator.
+        // `last = true` is what makes clap require that separator at all —
+        // without it this would just be an ordinary (and, without `--`,
+        // earlier-consumed) positional (spec §5.1).
         #[arg(last = true)]
         question: Option<String>,
     },
@@ -91,13 +101,43 @@ enum CliCommand {
 
 #[derive(Subcommand)]
 enum ConfigAction {
-    Init,
+    Init {
+        /// Skip the interactive setup wizard and write the default template.
+        // PRD 08-08-pre-0-1-0-cli-skills-markdown-init D4: also the implicit
+        // behavior on a non-TTY/--json invocation, so this flag matters only
+        // to a TTY caller that wants npm-init--y-style non-interactive
+        // output. Never a blanket overwrite consent -- see `--force`.
+        #[arg(long)]
+        yes: bool,
+        /// Overwrite an existing configuration file without prompting.
+        // The only overwrite consent path (D4): a TTY caller without this
+        // flag gets a Confirm prompt (default No); a non-TTY caller without
+        // it keeps today's CONFIG_EXISTS behavior.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print the resolved configuration.
+    // "Resolved" means after serde's own field-level defaulting
+    // (`Config::load`'s output as-is) — never additionally
+    // filesystem-canonicalized per wiki, which stays `doctor`'s job. clap
+    // derives this variant's kebab-case name as `list`, which is
+    // unambiguous alongside the pre-existing top-level `CliCommand::List`
+    // (the wiki registry listing) because the two live at different
+    // subcommand depths: `llm-wikis list` versus `llm-wikis config list` —
+    // clap requires the full `config` prefix to reach this one, so there is
+    // no parse-time collision.
+    List,
+    /// Validate the configuration without side effects.
+    // `doctor` covers environment/provider verification and is unchanged by
+    // this task.
+    Validate,
 }
 
-/// A CLI-only mirror of [`Agent`] purely so `clap::ValueEnum` can be derived
-/// here without adding a clap dependency to `src/output.rs` (out of this
-/// task's file boundary). Variant names already lower-case to `claude`/
-/// `codex` under clap's default kebab-case rule, matching spec §5.1 exactly.
+/// The agent to use: `claude` or `codex`.
+// A CLI-only mirror of [`Agent`] purely so `clap::ValueEnum` can be derived
+// here without adding a clap dependency to `src/output.rs`. Variant names
+// already lower-case to `claude`/`codex` under clap's default kebab-case
+// rule, matching the CLI surface exactly.
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum AgentArg {
     Claude,
@@ -149,8 +189,32 @@ fn handle_parse_error(e: &clap::Error, args: &[OsString]) -> i32 {
         }
         _ => {
             let json_mode = args.iter().any(|a| a == "--json");
-            let err = AppError::new(ErrorCode::ArgumentInvalid, first_line(&e.to_string()));
-            emit_query(json_mode, query_failure_envelope(None, None, err))
+            let mut message = first_line(&e.to_string());
+            // A bare `llm-wikis query "question"` (missing the required `--`
+            // separator, spec §5.1) reaches clap's generic
+            // "unexpected argument" wording with no guidance toward the
+            // correct shape; a multi-value/repeated `--agent` on `doctor`
+            // (e.g. `--agent claude,codex` or `--agent claude --agent
+            // codex`) similarly reaches clap's generic wording with no
+            // reminder that `doctor --live` only ever checks one (wiki,
+            // agent) pair per run. Both are scoped to their own
+            // subcommand -- never applied to a parse failure in some other
+            // subcommand or the root command -- via `hint_subcommand`.
+            match hint_subcommand(e, args) {
+                Some("query") => message.push_str(&format!(" ({QUERY_USAGE_HINT})")),
+                Some("doctor") => message.push_str(&format!(" ({DOCTOR_USAGE_HINT})")),
+                _ => {}
+            }
+            let err = AppError::new(ErrorCode::ArgumentInvalid, message);
+            // `plain: false` is always safe here: this is a failure envelope
+            // (`err` above), and `emit_query`'s rendering routing is only
+            // ever consulted on the success branch.
+            emit_query(
+                json_mode,
+                false,
+                None,
+                query_failure_envelope(None, None, err),
+            )
         }
     }
 }
@@ -159,12 +223,97 @@ fn first_line(s: &str) -> String {
     s.lines().next().unwrap_or(s).trim().to_string()
 }
 
+/// The correct invocation shape, shown alongside `query`'s own argument
+/// errors. Guidance only -- the `--` requirement itself and every other
+/// parsing rule is unchanged.
+const QUERY_USAGE_HINT: &str = "try: llm-wikis query --wiki <id> -- \"<question>\"";
+
+/// Shown alongside `doctor`'s own argument errors when an operator tries to
+/// pass more than one agent in a single `--agent` (a comma-separated value,
+/// or a repeated flag). Guidance only -- `doctor --live` still checks
+/// exactly one (wiki, agent) pair per invocation; run it once per agent.
+const DOCTOR_USAGE_HINT: &str = "doctor runs one wiki/agent pair at a time; run it once per agent, e.g. llm-wikis doctor --wiki <id> --agent claude --live";
+
+/// Identifies which subcommand's argument parsing produced `e`, so its
+/// argument-error message can carry that subcommand's own usage hint (never
+/// another subcommand's, and never one at all for a parse failure that
+/// precedes subcommand resolution, e.g. an unrecognized top-level
+/// subcommand name).
+///
+/// Two clap error shapes need two different detection strategies here.
+/// Some kinds (e.g. `ArgumentConflict`, produced by a repeated
+/// non-repeatable `--agent`) render a `Usage:` line naming the deepest
+/// subcommand matcher active at failure time -- checked first, since it is
+/// clap's own authoritative answer. Other kinds (`InvalidValue`, produced
+/// by `--agent claude,codex`: clap's `ValueEnum` parser rejects the whole
+/// comma-joined string as not matching any single variant) render no
+/// `Usage:` line at all -- confirmed empirically for both `doctor --agent
+/// claude,codex` and `query --agent claude,codex`, whose rendered
+/// `clap::Error::to_string()` and `.context()` are byte-for-byte identical
+/// aside from the value itself, carrying no subcommand information
+/// whatsoever (`--agent` is declared identically on both subcommands). For
+/// that shape, the raw invocation argv is the only remaining source of
+/// truth, so this falls back to `subcommand_from_args`.
+fn hint_subcommand(e: &clap::Error, args: &[OsString]) -> Option<&'static str> {
+    if usage_line_mentions(e, "query") {
+        Some("query")
+    } else if usage_line_mentions(e, "doctor") {
+        Some("doctor")
+    } else {
+        subcommand_from_args(args)
+    }
+}
+
+/// True when clap's own rendered error carries a `Usage:` line naming
+/// `subcommand` -- i.e. the failure happened while matching arguments
+/// *within* that subcommand, not some other subcommand or the root command.
+/// clap always renders the usage line for the deepest matcher active at
+/// failure time, so this is a precise (not merely `args`-token-scanning)
+/// test when it fires at all (see `hint_subcommand`'s doc comment for the
+/// error kinds that render no `Usage:` line whatsoever).
+fn usage_line_mentions(e: &clap::Error, subcommand: &str) -> bool {
+    e.to_string()
+        .lines()
+        .any(|l| l.trim_start().starts_with("Usage:") && l.contains(&format!(" {subcommand} ")))
+}
+
+/// The `hint_subcommand` fallback for clap error kinds that render no
+/// `Usage:` line (see its doc comment). Walks the raw argv looking for the
+/// first bare (non-`--flag`) token, skipping only `--config`'s own value
+/// (the one global flag that consumes a following token before the
+/// subcommand name itself can appear) -- exactly the shape every real
+/// invocation of this CLI takes: `llm-wikis [--json] [--config PATH]
+/// <subcommand> ...`. Returns `None` for anything else (an unrecognized
+/// subcommand name, or no bare token at all), so an unrelated parse failure
+/// never picks up either hint.
+fn subcommand_from_args(args: &[OsString]) -> Option<&'static str> {
+    let mut iter = args.iter().skip(1);
+    while let Some(arg) = iter.next() {
+        let token = arg.to_string_lossy();
+        if token == "--config" {
+            iter.next();
+            continue;
+        }
+        if token.starts_with("--") {
+            continue;
+        }
+        return match token.as_ref() {
+            "doctor" => Some("doctor"),
+            "query" => Some("query"),
+            _ => None,
+        };
+    }
+    None
+}
+
 fn dispatch(cli: Cli) -> i32 {
     let json = cli.json;
     let config_override = cli.config.as_deref();
     match cli.command {
         CliCommand::Config { action } => match action {
-            ConfigAction::Init => run_config_init(json, config_override),
+            ConfigAction::Init { yes, force } => run_config_init(json, config_override, yes, force),
+            ConfigAction::List => run_config_list(json, config_override),
+            ConfigAction::Validate => run_config_validate(json, config_override),
         },
         CliCommand::List => run_list_command(json, config_override),
         CliCommand::Doctor { wiki, agent, live } => {
@@ -173,12 +322,14 @@ fn dispatch(cli: Cli) -> i32 {
         CliCommand::Query {
             wiki,
             agent,
+            plain,
             question,
         } => run_query_command(
             json,
             config_override,
             wiki,
             agent.map(Agent::from),
+            plain,
             question,
         ),
     }
@@ -231,6 +382,19 @@ fn render_json_generic<T: serde::Serialize>(value: &T) -> String {
     rendered
 }
 
+/// The one human-readable rendering of a top-level command failure (spec
+/// §5.1/§5.3, PRD 08-06-pre-0-1-0-cli-refinements D2/AC3): always stderr,
+/// never stdout, so a pipe/redirect/CI consumer of stdout never sees error
+/// text mixed into whatever partial human output preceded it. `--json` mode
+/// never calls this — the failing envelope's `error` object is already part
+/// of the single JSON document the `emit_*`/`run_config_*` functions write
+/// to stdout instead. The single source of truth for the format string,
+/// replacing what used to be five independently written
+/// `println!("error: {} ({})", ...)` call sites.
+fn eprint_error_line(err: &AppError) {
+    eprintln!("error: {} ({})", err.code.as_str(), err.message);
+}
+
 fn error_code_from_str(code: &str) -> Option<ErrorCode> {
     ErrorCode::ALL.iter().copied().find(|c| c.as_str() == code)
 }
@@ -239,34 +403,175 @@ fn error_code_from_str(code: &str) -> Option<ErrorCode> {
 // `config init` (spec §5.1)
 // ---------------------------------------------------------------------------
 
-fn run_config_init(json: bool, override_path: Option<&Path>) -> i32 {
-    let envelope = match override_path {
+/// Resolves the path `config init` should target, or an already-built
+/// failure envelope when that resolution itself fails (a relative
+/// `--config` override, or an unresolvable platform default) -- preserves
+/// the pre-existing behavior of echoing the raw override value back in
+/// `path` on an override validation failure, versus an empty `path` when no
+/// platform default could be derived at all. Boxed per
+/// `clippy::result_large_err` -- `ConfigInitEnvelope` is a full public
+/// envelope, well past the lint's small-`Err`-variant threshold.
+fn resolve_init_path(override_path: Option<&Path>) -> Result<PathBuf, Box<ConfigInitEnvelope>> {
+    match override_path {
         Some(p) => match validate_config_override(p) {
-            Ok(()) => init_envelope(p),
-            Err(err) => ConfigInitEnvelope {
+            Ok(()) => Ok(p.to_path_buf()),
+            Err(err) => Err(Box::new(ConfigInitEnvelope {
                 schema_version: SCHEMA_VERSION,
                 ok: false,
                 operation: "config_init",
                 path: p.display().to_string(),
                 created: false,
                 error: Some(err),
-            },
+            })),
         },
         None => match default_config_path(Platform::host(), &ProcessEnv) {
-            Some(p) => init_envelope(&p),
-            None => ConfigInitEnvelope {
+            Some(p) => Ok(p),
+            None => Err(Box::new(ConfigInitEnvelope {
                 schema_version: SCHEMA_VERSION,
                 ok: false,
                 operation: "config_init",
                 path: String::new(),
-                created: false,
                 error: Some(AppError::new(
                     ErrorCode::ConfigInvalid,
                     "cannot determine the platform configuration path: a required environment variable is unset",
                 )),
-            },
+                created: false,
+            })),
         },
+    }
+}
+
+fn outcome_to_init_envelope(
+    path: &Path,
+    result: Result<ConfigInitOutcome, AppError>,
+) -> ConfigInitEnvelope {
+    match result {
+        Ok(outcome) => ConfigInitEnvelope {
+            schema_version: SCHEMA_VERSION,
+            ok: true,
+            operation: "config_init",
+            path: outcome.path.display().to_string(),
+            created: outcome.created,
+            error: None,
+        },
+        Err(err) => ConfigInitEnvelope {
+            schema_version: SCHEMA_VERSION,
+            ok: false,
+            operation: "config_init",
+            path: path.display().to_string(),
+            created: false,
+            error: Some(err),
+        },
+    }
+}
+
+/// Writes the fixed, non-interactive starter template (`--yes`, non-TTY, or
+/// `--json`, PRD 08-08-pre-0-1-0-cli-skills-markdown-init D4). `force`
+/// keeps its "only overwrite consent" role here too: absent, this is
+/// exactly `init(path)`'s pre-existing exclusive-create behavior.
+fn write_template_init(path: &Path, force: bool) -> ConfigInitEnvelope {
+    let result = if force {
+        init_with_content(path, INIT_TEMPLATE, true)
+    } else {
+        init(path)
     };
+    outcome_to_init_envelope(path, result)
+}
+
+/// The TTY-only interactive path (D4): an existing file without `--force`
+/// is confirmed first (declining leaves `CONFIG_EXISTS` and no write);
+/// otherwise the wizard collects `default_agent` and the two provider
+/// executables, and the customized template is written -- force-written
+/// whenever the file already existed (either `--force` or a just-accepted
+/// confirm), exclusive-create otherwise. Neither `dialoguer` prompt type is
+/// constructed on any other code path (`run_config_init`'s own branch
+/// above never reaches this function at all when non-interactive).
+fn run_config_init_interactive(path: &Path, force: bool) -> ConfigInitEnvelope {
+    let file_exists = path.exists();
+    if file_exists && !force {
+        let confirmed = dialoguer::Confirm::new()
+            .with_prompt(format!(
+                "configuration already exists at {}. Overwrite?",
+                path.display()
+            ))
+            .default(false)
+            .interact_opt()
+            .unwrap_or(Some(false))
+            .unwrap_or(false);
+        if !confirmed {
+            return ConfigInitEnvelope {
+                schema_version: SCHEMA_VERSION,
+                ok: false,
+                operation: "config_init",
+                path: path.display().to_string(),
+                created: false,
+                error: Some(AppError::new(
+                    ErrorCode::ConfigExists,
+                    "configuration file already exists",
+                )),
+            };
+        }
+    }
+
+    let (default_agent, claude_executable, codex_executable) = run_config_init_wizard();
+    let content = render_init_template(default_agent, &claude_executable, &codex_executable);
+    let result = init_with_content(path, &content, force || file_exists);
+    outcome_to_init_envelope(path, result)
+}
+
+/// Prompts for `default_agent` (Select, `claude`/`codex`/`none`) and the two
+/// provider executables (Text, Enter accepts the shown default). A
+/// prompt-level I/O failure falls back to that field's own default rather
+/// than propagating -- consistent with `run_config_init_interactive`'s
+/// Esc-as-No handling for the overwrite confirm.
+fn run_config_init_wizard() -> (Option<Agent>, String, String) {
+    let default_agent_choice = dialoguer::Select::new()
+        .with_prompt("default_agent")
+        .items(["claude", "codex", "none"])
+        .default(0)
+        .interact()
+        .unwrap_or(0);
+    let default_agent = match default_agent_choice {
+        0 => Some(Agent::Claude),
+        1 => Some(Agent::Codex),
+        _ => None,
+    };
+    let claude_executable = dialoguer::Input::<String>::new()
+        .with_prompt("providers.claude.executable")
+        .default("claude".to_string())
+        .interact_text()
+        .unwrap_or_else(|_| "claude".to_string());
+    let codex_executable = dialoguer::Input::<String>::new()
+        .with_prompt("providers.codex.executable")
+        .default("codex".to_string())
+        .interact_text()
+        .unwrap_or_else(|_| "codex".to_string());
+    (default_agent, claude_executable, codex_executable)
+}
+
+fn run_config_init(json: bool, override_path: Option<&Path>, yes: bool, force: bool) -> i32 {
+    let path = match resolve_init_path(override_path) {
+        Ok(p) => p,
+        Err(envelope) => return emit_config_init(json, *envelope),
+    };
+
+    // PRD 08-08-pre-0-1-0-cli-skills-markdown-init D4: the wizard triggers
+    // only on a TTY (both streams -- this UI both prompts on stdout and
+    // reads a response), never with `--json`, and never with `--yes`.
+    // `assert_cmd::Command` never provides a controlling terminal, so this
+    // branch is structurally unreachable from the automated test suite,
+    // exactly like `start_query_spinner` (this same file).
+    let interactive =
+        !json && !yes && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let envelope = if interactive {
+        run_config_init_interactive(&path, force)
+    } else {
+        write_template_init(&path, force)
+    };
+    emit_config_init(json, envelope)
+}
+
+fn emit_config_init(json: bool, envelope: ConfigInitEnvelope) -> i32 {
     let exit = envelope
         .error
         .as_ref()
@@ -277,7 +582,76 @@ fn run_config_init(json: bool, override_path: Option<&Path>) -> i32 {
     } else if envelope.ok {
         println!("Created configuration at {}", envelope.path);
     } else if let Some(err) = &envelope.error {
-        println!("error: {} ({})", err.code.as_str(), err.message);
+        eprint_error_line(err);
+    }
+    exit as i32
+}
+
+// ---------------------------------------------------------------------------
+// `config list` / `config validate` (PRD 08-06-pre-0-1-0-cli-refinements
+// AC1, D7). `doctor` already covers environment verification (D1); these
+// two subcommands are the remaining, narrower ask: print/validate the
+// resolved configuration itself, without starting a provider. `config list`
+// is a deliberately different command from the top-level `list` (which
+// enumerates registered wikis, `print_list_human` below) — this one prints
+// the whole resolved configuration document that produced that registry.
+// ---------------------------------------------------------------------------
+
+fn agent_lowercase(agent: Agent) -> &'static str {
+    match agent {
+        Agent::Claude => "claude",
+        Agent::Codex => "codex",
+    }
+}
+
+fn run_config_list(json: bool, override_path: Option<&Path>) -> i32 {
+    let envelope: ConfigListEnvelope = match resolve_config_path(override_path) {
+        Ok(p) => config_list_envelope(&p),
+        Err(e) => config_list_error_envelope(e),
+    };
+    let exit = envelope
+        .error
+        .as_ref()
+        .map(|e| e.code.exit_code())
+        .unwrap_or(0);
+    if json {
+        print!("{}", render_json_generic(&envelope));
+    } else if let Some(config) = &envelope.config {
+        print_config_list_human(config);
+    } else if let Some(err) = &envelope.error {
+        eprint_error_line(err);
+    }
+    exit as i32
+}
+
+fn print_config_list_human(config: &Config) {
+    println!("config_version = {}", config.config_version);
+    match config.default_agent {
+        Some(a) => println!("default_agent = {}", agent_lowercase(a)),
+        None => println!("default_agent = (none)"),
+    }
+    for (id, wiki) in &config.wikis {
+        let agents: Vec<&'static str> = wiki.agents.iter().copied().map(agent_lowercase).collect();
+        println!("{id} - {} [{}]", wiki.title, agents.join(","));
+    }
+}
+
+fn run_config_validate(json: bool, override_path: Option<&Path>) -> i32 {
+    let envelope: ConfigValidateEnvelope = match resolve_config_path(override_path) {
+        Ok(p) => config_validate_envelope(&p),
+        Err(e) => config_validate_error_envelope(e),
+    };
+    let exit = envelope
+        .error
+        .as_ref()
+        .map(|e| e.code.exit_code())
+        .unwrap_or(0);
+    if json {
+        print!("{}", render_json_generic(&envelope));
+    } else if envelope.ok {
+        println!("Configuration at {} is valid.", envelope.path);
+    } else if let Some(err) = &envelope.error {
+        eprint_error_line(err);
     }
     exit as i32
 }
@@ -306,7 +680,7 @@ fn run_list_command(json: bool, override_path: Option<&Path>) -> i32 {
 
 fn print_list_human(envelope: &ListEnvelope) {
     if let Some(err) = &envelope.error {
-        println!("error: {} ({})", err.code.as_str(), err.message);
+        eprint_error_line(err);
         return;
     }
     for wiki in &envelope.wikis {
@@ -396,7 +770,7 @@ fn doctor_exit_code(envelope: &DoctorEnvelope) -> u8 {
 
 fn print_doctor_human(envelope: &DoctorEnvelope) {
     if let Some(err) = &envelope.error {
-        println!("error: {} ({})", err.code.as_str(), err.message);
+        eprint_error_line(err);
         return;
     }
     for result in &envelope.results {
@@ -448,7 +822,29 @@ fn argument_invalid_query(message: impl Into<String>) -> QueryEnvelope {
     )
 }
 
-fn emit_query(json: bool, envelope: QueryEnvelope) -> i32 {
+/// One viewer attempt, reduced to `Ok(rendered)` or `Err(short reason)` -- the
+/// caller only needs to know whether it may print the viewer's bytes.
+fn render_through_viewer(
+    config: &crate::config::ViewerConfig,
+    human: &str,
+) -> Result<String, String> {
+    let viewer = crate::viewer::Viewer::resolve(config, &ProcessEnv).map_err(|e| e.message)?;
+    viewer
+        .render(human, crate::viewer::terminal_width())
+        .map_err(|e| e.message)
+}
+
+/// `viewer` is `None` at the call sites that run before a configuration file
+/// has been loaded. Those all carry an error envelope, which never reaches the
+/// rendering branch below -- but passing `None` rather than a default keeps
+/// "no configuration was read" distinguishable from "the operator configured
+/// the default", instead of inventing a viewer preference nobody expressed.
+fn emit_query(
+    json: bool,
+    plain: bool,
+    viewer: Option<&crate::config::ViewerConfig>,
+    envelope: QueryEnvelope,
+) -> i32 {
     let exit = envelope
         .error
         .as_ref()
@@ -456,8 +852,50 @@ fn emit_query(json: bool, envelope: QueryEnvelope) -> i32 {
         .unwrap_or(0);
     if json {
         print!("{}", render_json(&envelope));
+    } else if let Some(err) = &envelope.error {
+        // D2/AC3: the human-mode error line is a stream-routing decision,
+        // not `render_human`'s concern (see that function's own doc
+        // comment) — `render_human` is only ever called below, on the
+        // success shape.
+        eprint_error_line(err);
     } else {
-        print!("{}", render_human(&envelope));
+        let human = render_human(&envelope);
+        // PRD 08-08-pre-0-1-0-cli-skills-markdown-init D3/AC2, retargeted by
+        // 08-12 D9: the opt-out conditions are unchanged -- `--plain`, a
+        // piped/redirected stdout, or `NO_COLOR` (any value -- no-color.org:
+        // presence, not content, disables color) all print raw markdown. Only
+        // the renderer behind the remaining branch changed, from an in-process
+        // termimad call to an external `leaf --inline` child. `NO_COLOR` stays
+        // this wrapper's responsibility: leaf does not read it (task 08-12
+        // Findings F4).
+        let leaf_backend = matches!(
+            viewer.map(|v| v.backend),
+            Some(crate::config::ViewerBackend::Leaf)
+        );
+        if !plain
+            && leaf_backend
+            && std::io::stdout().is_terminal()
+            && std::env::var_os("NO_COLOR").is_none()
+        {
+            // Capture-then-commit (08-12 design.md §2): stdout receives either
+            // the viewer's complete output or the raw markdown, never a
+            // half-rendered answer followed by a second full copy. `viewer` is
+            // Some here -- `leaf_backend` cannot be true otherwise.
+            match render_through_viewer(
+                viewer.expect("leaf backend implies a viewer table"),
+                &human,
+            ) {
+                Ok(rendered) => print!("{rendered}"),
+                Err(reason) => {
+                    eprintln!(
+                        "warning: markdown viewer unavailable, printing raw markdown ({reason})"
+                    );
+                    print!("{human}");
+                }
+            }
+        } else {
+            print!("{human}");
+        }
     }
     exit as i32
 }
@@ -516,6 +954,7 @@ fn run_query_command(
     override_path: Option<&Path>,
     wiki_values: Vec<String>,
     agent: Option<Agent>,
+    plain: bool,
     question_positional: Option<String>,
 ) -> i32 {
     // spec §5.1: "accepts one and only one --wiki. Repeating it or supplying
@@ -526,31 +965,37 @@ fn run_query_command(
         [] => {
             return emit_query(
                 json,
-                argument_invalid_query("query requires exactly one --wiki"),
+                plain,
+                None,
+                argument_invalid_query(format!(
+                    "query requires exactly one --wiki ({QUERY_USAGE_HINT})"
+                )),
             );
         }
         _ => {
             return emit_query(
                 json,
-                argument_invalid_query(
-                    "query accepts exactly one --wiki; repeating it or supplying \"all\" is invalid",
-                ),
+                plain,
+                None,
+                argument_invalid_query(format!(
+                    "query accepts exactly one --wiki; repeating it or supplying \"all\" is invalid ({QUERY_USAGE_HINT})"
+                )),
             );
         }
     };
 
     let question_bytes = match resolve_question_bytes(question_positional) {
         Ok(bytes) => bytes,
-        Err(err) => return emit_query(json, query_failure_envelope(None, None, err)),
+        Err(err) => return emit_query(json, plain, None, query_failure_envelope(None, None, err)),
     };
 
     let config_path = match resolve_config_path(override_path) {
         Ok(p) => p,
-        Err(e) => return emit_query(json, query_failure_envelope(None, None, e)),
+        Err(e) => return emit_query(json, plain, None, query_failure_envelope(None, None, e)),
     };
     let config = match Config::load(&config_path) {
         Ok(c) => c,
-        Err(e) => return emit_query(json, query_failure_envelope(None, None, e)),
+        Err(e) => return emit_query(json, plain, None, query_failure_envelope(None, None, e)),
     };
 
     // spec §5.1: `--agent` is optional only when the wiki's derived
@@ -568,6 +1013,8 @@ fn run_query_command(
                 None => {
                     return emit_query(
                         json,
+                        plain,
+                        None,
                         argument_invalid_query(
                             "--agent is required: no default_agent is configured and enabled for this wiki",
                         ),
@@ -580,9 +1027,12 @@ fn run_query_command(
 
     let cache_path = match resolve_cache_path() {
         Ok(p) => p,
-        Err(e) => return emit_query(json, query_failure_envelope(None, None, e)),
+        Err(e) => return emit_query(json, plain, None, query_failure_envelope(None, None, e)),
     };
 
+    // Cloned before `config` moves into the request: this is the one call site
+    // that can reach the rendering branch.
+    let viewer_config = config.viewer.clone();
     let request = QueryRequest {
         config,
         config_dir: config_dir_of(&config_path),
@@ -592,9 +1042,36 @@ fn run_query_command(
         temp_base: std::env::temp_dir(),
     };
     let service = QueryService::new(RealProcessRunner, FileProbeStore::new(cache_path));
+    let spinner = start_query_spinner();
     let envelope = match service.query(request, QueryMode::Enforced) {
         Ok(envelope) => envelope,
         Err(e) => query_failure_envelope(None, None, e),
     };
-    emit_query(json, envelope)
+    // Cleared unconditionally, before either branch above touches
+    // stdout/stderr again (PRD 08-06-pre-0-1-0-cli-refinements AC2:
+    // "cleared before output," success or failure alike).
+    if let Some(pb) = spinner {
+        pb.finish_and_clear();
+    }
+    emit_query(json, plain, Some(&viewer_config), envelope)
+}
+
+/// Starts a stderr-only spinner for the duration of the blocking provider
+/// call (AC2), but only when stderr is an interactive terminal — an
+/// `assert_cmd`-driven test, a pipe, a redirect, or CI never satisfies this,
+/// so the spinner branch is unreachable from any automated test and never
+/// contaminates stdout/stderr byte-for-byte comparisons. `None` is returned,
+/// not a disabled/no-op spinner, so a non-interactive run never even
+/// constructs an `indicatif` handle.
+fn start_query_spinner() -> Option<indicatif::ProgressBar> {
+    if !std::io::stderr().is_terminal() {
+        return None;
+    }
+    let pb = indicatif::ProgressBar::new_spinner();
+    pb.set_draw_target(indicatif::ProgressDrawTarget::stderr());
+    if let Ok(style) = indicatif::ProgressStyle::with_template("{spinner} querying...") {
+        pb.set_style(style.tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "));
+    }
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+    Some(pb)
 }

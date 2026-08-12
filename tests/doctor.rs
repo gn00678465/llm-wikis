@@ -11,9 +11,9 @@ use std::sync::{Arc, Mutex};
 
 use llm_wikis::config::{
     Config, LoadMode, ProviderConfig, ProviderWikiConfig, ProvidersConfig, RuntimeConfig,
-    WikiConfig,
+    ViewerBackend, ViewerConfig, WikiConfig,
 };
-use llm_wikis::doctor::{CheckStatus, DoctorRequest, run_doctor};
+use llm_wikis::doctor::{CheckStatus, DoctorEnvelope, DoctorRequest, run_doctor};
 use llm_wikis::error::AppError;
 use llm_wikis::output::{Agent, DOCTOR_CHECK_NAMES};
 use llm_wikis::probes::{FileProbeStore, ProbeKey, ProbeReader, ProbeRecord};
@@ -150,6 +150,8 @@ fn build_config(fixture: &Fixture, agents: Vec<Agent>) -> Config {
         };
         let provider_cfg = Some(ProviderConfig {
             executable: Some(fixture.executable_path.display().to_string()),
+            model: None,
+            effort: None,
         });
         match agent {
             Agent::Claude => {
@@ -170,6 +172,12 @@ fn build_config(fixture: &Fixture, agents: Vec<Agent>) -> Config {
         default_agent: agents.first().copied(),
         providers,
         runtime: RuntimeConfig::default(),
+        // Explicitly plain: these fixtures must not reach out to a real
+        // viewer binary on the host running the tests.
+        viewer: ViewerConfig {
+            backend: ViewerBackend::Plain,
+            executable: None,
+        },
         wikis,
     }
 }
@@ -291,6 +299,8 @@ fn build_local_plugin_config(fixture: &Fixture, agent: Agent, reject: bool) -> C
     wikis.insert(WIKI_ID.to_string(), wiki);
     let provider_cfg = Some(ProviderConfig {
         executable: Some(fixture.executable_path.display().to_string()),
+        model: None,
+        effort: None,
     });
     let mut providers = ProvidersConfig {
         claude: None,
@@ -305,6 +315,12 @@ fn build_local_plugin_config(fixture: &Fixture, agent: Agent, reject: bool) -> C
         default_agent: Some(agent),
         providers,
         runtime: RuntimeConfig::default(),
+        // Explicitly plain: these fixtures must not reach out to a real
+        // viewer binary on the host running the tests.
+        viewer: ViewerConfig {
+            backend: ViewerBackend::Plain,
+            executable: None,
+        },
         wikis,
     }
 }
@@ -343,6 +359,158 @@ fn plugin_clean_shape_passes_entrypoint_check() {
 }
 
 // ---------------------------------------------------------------------------
+// viewer check (issue #8)
+// ---------------------------------------------------------------------------
+
+/// A fake viewer that records one line per invocation, so a test can count
+/// how many times doctor actually spawned it.
+#[cfg(windows)]
+fn fake_counting_viewer(dir: &Path) -> PathBuf {
+    let path = dir.join("counting-viewer.cmd");
+    fs::write(
+        &path,
+        "@echo off
+echo call>>\"%~dp0calls.log\"
+echo rendered
+",
+    )
+    .unwrap();
+    path
+}
+
+#[cfg(unix)]
+fn fake_counting_viewer(dir: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join("counting-viewer.sh");
+    fs::write(
+        &path,
+        "#!/bin/sh
+echo call >> \"$(dirname \"$0\")/calls.log\"
+echo rendered
+",
+    )
+    .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+/// Runs doctor with the supplied viewer table and returns the `viewer` check
+/// from the first pair.
+fn viewer_check_for(viewer: ViewerConfig, agents: Vec<Agent>) -> (DoctorEnvelope, Fixture) {
+    let fixture = build_fixture();
+    let mut config = build_config(&fixture, agents.clone());
+    config.viewer = viewer;
+    let runner = FakeProcessRunner::new();
+    for agent in &agents {
+        queue_success_probes(&runner, *agent);
+    }
+    let store = probe_store(&fixture);
+    let request = doctor_request(&fixture, config, None, None, false);
+    (run_doctor(request, runner, &store), fixture)
+}
+
+#[test]
+fn viewer_check_passes_and_says_so_when_the_backend_is_plain() {
+    let (envelope, _fixture) = viewer_check_for(
+        ViewerConfig {
+            backend: ViewerBackend::Plain,
+            executable: None,
+        },
+        vec![Agent::Claude],
+    );
+    let check = find_check(&envelope, WIKI_ID, Agent::Claude, "viewer").unwrap();
+    assert_eq!(check.status, CheckStatus::Pass);
+    assert_eq!(check.code, None);
+}
+
+/// A missing viewer must never fail the run: the answer a `query` would return
+/// is complete either way, only its presentation degrades. Failing here would
+/// give `doctor` a non-zero exit and break scripts that gate on it.
+#[test]
+fn missing_viewer_is_a_warning_and_never_fails_the_pair() {
+    let missing = if cfg!(windows) {
+        r"C:\definitely\not\here\leaf.exe"
+    } else {
+        "/definitely/not/here/leaf"
+    };
+    let (envelope, _fixture) = viewer_check_for(
+        ViewerConfig {
+            backend: ViewerBackend::Leaf,
+            executable: Some(missing.to_string()),
+        },
+        vec![Agent::Claude],
+    );
+    let check = find_check(&envelope, WIKI_ID, Agent::Claude, "viewer").unwrap();
+    assert_eq!(check.status, CheckStatus::Warn);
+    assert_eq!(check.code.as_deref(), Some("VIEWER_UNAVAILABLE"));
+    assert!(
+        envelope.results.iter().all(|r| r.ok),
+        "a missing viewer must not mark the pair as failed"
+    );
+}
+
+/// The viewer is a property of the installation, not of a (wiki, agent) pair.
+/// It is probed once and the same verdict is reported under every pair — this
+/// pins both halves: the check is present everywhere, and identical everywhere.
+#[test]
+fn viewer_check_is_reported_identically_for_every_pair() {
+    // A real `leaf` backend, not `plain`: with `plain` the viewer is never
+    // spawned at all, so the assertion below could not tell a probe-once
+    // implementation from one that probes inside the pair loop.
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = fake_counting_viewer(tmp.path());
+    let (envelope, _fixture) = viewer_check_for(
+        ViewerConfig {
+            backend: ViewerBackend::Leaf,
+            executable: Some(fake.display().to_string()),
+        },
+        vec![Agent::Claude, Agent::Codex],
+    );
+
+    let checks: Vec<_> = envelope
+        .results
+        .iter()
+        .map(|r| {
+            r.checks
+                .iter()
+                .find(|c| c.name == "viewer")
+                .expect("every pair carries a viewer check")
+        })
+        .collect();
+    assert_eq!(checks.len(), 2);
+    assert_eq!(checks[0].status, checks[1].status);
+    assert_eq!(checks[0].message, checks[1].message);
+
+    // The viewer is a property of the installation, not of a (wiki, agent)
+    // pair: two pairs must still cost exactly one spawn.
+    let invocations = fs::read_to_string(tmp.path().join("calls.log"))
+        .expect("the viewer was spawned at least once")
+        .lines()
+        .count();
+    assert_eq!(
+        invocations, 1,
+        "two pairs must share one probe, saw {invocations} viewer invocations"
+    );
+}
+
+/// The nine pre-existing checks must keep their positions for consumers that
+/// index into `checks` rather than search it.
+#[test]
+fn viewer_check_is_appended_last_leaving_prior_positions_untouched() {
+    let (envelope, _fixture) = viewer_check_for(
+        ViewerConfig {
+            backend: ViewerBackend::Plain,
+            executable: None,
+        },
+        vec![Agent::Claude],
+    );
+    let checks = &envelope.results[0].checks;
+    assert_eq!(checks.last().unwrap().name, "viewer");
+    assert_eq!(checks[0].name, "config");
+    assert_eq!(checks[1].name, "roots");
+}
+
+// ---------------------------------------------------------------------------
 // OFF-195 / OFF-196: check-name vocabulary and code semantics
 // ---------------------------------------------------------------------------
 
@@ -358,7 +526,7 @@ fn check_name_vocabulary() {
     let envelope = run_doctor(request, runner, &store);
 
     let vocabulary: std::collections::BTreeSet<&str> = DOCTOR_CHECK_NAMES.iter().copied().collect();
-    assert_eq!(vocabulary.len(), 9);
+    assert_eq!(vocabulary.len(), 10);
     assert!(!vocabulary.contains("profile"));
     assert!(!vocabulary.contains("index_freshness"));
 
@@ -366,7 +534,7 @@ fn check_name_vocabulary() {
         for check in &result.checks {
             assert!(
                 vocabulary.contains(check.name),
-                "check name {:?} is not in the 9-value vocabulary",
+                "check name {:?} is not in the 10-value vocabulary",
                 check.name
             );
         }
@@ -1200,6 +1368,8 @@ fn live_step6_invalidation_on_executable_version_fingerprint_or_query_prompt_cha
             skill_path: Some(SKILL_RELATIVE),
             plugin_dir: None,
             executable_declaration: &executable_str,
+            model_declaration: None,
+            effort_declaration: None,
             provider_contract_version: llm_wikis::query::PROVIDER_CONTRACT_VERSION,
         };
     let compat_input_before = build_compat_input(QUERY_PROMPT);
@@ -1253,6 +1423,8 @@ fn plain_query_service_never_calls_doctor_publish() {
         skill_path: provider.skill_path.as_deref(),
         plugin_dir: provider.plugin_dir.as_deref(),
         executable_declaration: &fixture.executable_path.display().to_string(),
+        model_declaration: None,
+        effort_declaration: None,
         provider_contract_version: llm_wikis::query::PROVIDER_CONTRACT_VERSION,
     };
     let compatibility_fingerprint =

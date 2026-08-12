@@ -218,17 +218,51 @@ fn help_prints_product_name_and_exits_zero() {
     assert!(stdout.contains("llm-wikis"), "{stdout}");
 }
 
+// PRD 08-07-first-run-config-and-query-ux-fixes AC5: every clap-visible
+// `///` doc comment is a short, user-facing one-liner -- the rationale
+// prose that used to leak into `--help` (worst case: `config list`/
+// `validate`'s full planning paragraphs) now lives only in `//` comments in
+// the source, never in rendered help text. Checked across the root command
+// and every subcommand, not just the two known offenders.
+#[test]
+fn help_output_never_leaks_internal_planning_markers() {
+    let forbidden = ["PRD", "AC1", "D7", "spec §", "checklist", "OFF-"];
+    let help_invocations: &[&[&str]] = &[
+        &["--help"],
+        &["list", "--help"],
+        &["doctor", "--help"],
+        &["query", "--help"],
+        &["config", "--help"],
+        &["config", "init", "--help"],
+        &["config", "list", "--help"],
+        &["config", "validate", "--help"],
+    ];
+    for args in help_invocations {
+        let assert = bin().args(*args).assert().success();
+        let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+        for marker in forbidden {
+            assert!(
+                !stdout.contains(marker),
+                "{args:?} --help leaked internal marker {marker:?}:\n{stdout}"
+            );
+        }
+    }
+}
+
 #[test]
 fn unknown_subcommand_is_argument_invalid_not_a_panic() {
     let assert = bin().args(["skill", "foo"]).assert().failure().code(2);
     let out = assert.get_output();
-    // No stderr diagnostics at all for this path (this wrapper never writes
-    // to stderr outside `--help`/`--version`); the human-mode error text
-    // lands on stdout instead, via the same rendering every other failure
-    // uses.
-    assert!(out.stderr.is_empty());
+    // PRD 08-06-pre-0-1-0-cli-refinements D2/AC3: human-mode error lines
+    // move to stderr for every subcommand, including a top-level parse
+    // failure that never reaches a specific subcommand handler — stdout
+    // stays completely empty (`argument_invalid_query` sets `answer: None`)
+    // and the error line lands on stderr instead, via the same
+    // `eprint_error_line` rendering every other failure uses.
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("ARGUMENT_INVALID"), "{stdout}");
+    assert!(stdout.is_empty(), "{stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("ARGUMENT_INVALID"), "{stderr}");
 }
 
 // OFF-170 (`cargo test --test cli_contract -- argument_invalid_exit`):
@@ -343,6 +377,282 @@ fn config_init_json_success_and_failure_shapes() {
     assert_eq!(v2["ok"], false);
     assert_eq!(v2["created"], false);
     assert_eq!(v2["error"]["code"], "CONFIG_EXISTS");
+}
+
+// PRD 08-08-pre-0-1-0-cli-skills-markdown-init AC4: every non-TTY path in
+// design.md §2.2's matrix stays exercisable through `assert_cmd` (never a
+// controlling terminal, so `config init` always takes its non-interactive
+// branch here) -- `--force` overwrites without a prompt; `--force` absent
+// still returns `CONFIG_EXISTS` (regression); `--yes` is byte-identical to
+// the pre-task default write.
+#[test]
+fn config_init_force_overwrites_an_existing_file_without_a_prompt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("config.toml");
+    let target_str = target.display().to_string();
+
+    bin()
+        .args(["--config", &target_str, "config", "init"])
+        .assert()
+        .success();
+    fs::write(&target, "config_version = 1\n# tampered\n").unwrap();
+    let tampered = fs::read(&target).unwrap();
+
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            &target_str,
+            "config",
+            "init",
+            "--force",
+        ])
+        .assert()
+        .success()
+        .code(0);
+    let v = stdout_json(&assert);
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["created"], true);
+    let after = fs::read(&target).unwrap();
+    assert_ne!(after, tampered, "--force must overwrite the tampered file");
+}
+
+#[test]
+fn config_init_without_force_still_refuses_to_overwrite_an_existing_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("config.toml");
+    let target_str = target.display().to_string();
+
+    bin()
+        .args(["--config", &target_str, "config", "init"])
+        .assert()
+        .success();
+
+    let assert = bin()
+        .args(["--json", "--config", &target_str, "config", "init"])
+        .assert()
+        .failure()
+        .code(2);
+    let v = stdout_json(&assert);
+    assert_eq!(v["error"]["code"], "CONFIG_EXISTS");
+}
+
+#[test]
+fn config_init_yes_produces_byte_identical_output_to_the_default_template() {
+    let tmp = tempfile::tempdir().unwrap();
+    let without_yes = tmp.path().join("without-yes.toml");
+    let with_yes = tmp.path().join("with-yes.toml");
+
+    bin()
+        .args(["--config", without_yes.to_str().unwrap(), "config", "init"])
+        .assert()
+        .success();
+    bin()
+        .args([
+            "--config",
+            with_yes.to_str().unwrap(),
+            "config",
+            "init",
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read(&without_yes).unwrap(),
+        fs::read(&with_yes).unwrap(),
+        "--yes must write the same template as the flag-omitted non-TTY default"
+    );
+}
+
+#[test]
+fn config_init_generated_file_passes_config_validate_regardless_of_which_path_produced_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("config.toml");
+    let target_str = target.display().to_string();
+
+    bin()
+        .args(["--config", &target_str, "config", "init", "--yes"])
+        .assert()
+        .success();
+
+    bin()
+        .args(["--json", "--config", &target_str, "config", "validate"])
+        .assert()
+        .success()
+        .code(0);
+}
+
+// ---------------------------------------------------------------------------
+// `config list` / `config validate` (PRD 08-06-pre-0-1-0-cli-refinements
+// AC1; subcommand renamed from `show` to `list` per D7). `doctor` is
+// unchanged by this task (D1) and is exercised elsewhere. `config list` is
+// distinct from the top-level `list` (wiki registry) subcommand exercised
+// above -- clap's `config` prefix keeps the two unambiguous on the command
+// line even though both derive to a bare `list` token at their own depth.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_list_json_success_and_failure_shapes() {
+    let reg = minimal_registry(Some("claude"), "\"claude\", \"codex\"");
+
+    let ok = bin()
+        .args([
+            "--json",
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "config",
+            "list",
+        ])
+        .assert()
+        .success()
+        .code(0);
+    let v = stdout_json(&ok);
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["operation"], "config_list");
+    assert_eq!(v["config"]["config_version"], 1);
+    assert_eq!(v["config"]["default_agent"], "claude");
+    assert!(v["config"]["wikis"]["demo"].is_object());
+    assert!(v["error"].is_null() || v.as_object().unwrap().get("error").is_none());
+
+    let (_tmp, missing) = nonexistent_config_path();
+    let failure = bin()
+        .args([
+            "--json",
+            "--config",
+            missing.to_str().unwrap(),
+            "config",
+            "list",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let vf = stdout_json(&failure);
+    assert_eq!(vf["ok"], false);
+    assert_eq!(vf["operation"], "config_list");
+    assert!(vf.as_object().unwrap().get("config").is_none());
+    assert_eq!(vf["error"]["code"], "CONFIG_INVALID");
+}
+
+#[test]
+fn config_list_human_mode_prints_the_registry_without_starting_a_provider() {
+    let reg = minimal_registry(Some("claude"), "\"claude\"");
+    let assert = bin()
+        .args([
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "config",
+            "list",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    assert!(stdout.contains("config_version = 1"), "{stdout}");
+    assert!(stdout.contains("default_agent = claude"), "{stdout}");
+    assert!(stdout.contains("demo"), "{stdout}");
+}
+
+#[test]
+fn config_list_human_mode_failure_prints_the_error_line_to_stderr_only() {
+    let (_tmp, missing) = nonexistent_config_path();
+    let assert = bin()
+        .args(["--config", missing.to_str().unwrap(), "config", "list"])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    assert!(String::from_utf8_lossy(&out.stdout).is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("CONFIG_INVALID"), "{stderr}");
+}
+
+#[test]
+fn config_validate_json_success_and_failure_shapes() {
+    let reg = minimal_registry(None, "\"claude\"");
+
+    let ok = bin()
+        .args([
+            "--json",
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "config",
+            "validate",
+        ])
+        .assert()
+        .success()
+        .code(0);
+    let v = stdout_json(&ok);
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["operation"], "config_validate");
+    let top: BTreeSet<String> = v.as_object().unwrap().keys().cloned().collect();
+    assert_eq!(
+        top,
+        ["schema_version", "ok", "operation", "path"]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        "config validate's success shape must never echo the parsed config back"
+    );
+
+    let (_tmp, missing) = nonexistent_config_path();
+    let failure = bin()
+        .args([
+            "--json",
+            "--config",
+            missing.to_str().unwrap(),
+            "config",
+            "validate",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let vf = stdout_json(&failure);
+    assert_eq!(vf["ok"], false);
+    assert_eq!(vf["operation"], "config_validate");
+    assert_eq!(vf["error"]["code"], "CONFIG_INVALID");
+}
+
+#[test]
+fn config_validate_never_mutates_the_target_file() {
+    // AC1: "without side effects" — a failing `validate` call must not
+    // touch the target file's bytes at all.
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("config.toml");
+    let tampered =
+        b"config_version = 1\n# deliberately incomplete, no closing table\n[wikis.demo".to_vec();
+    fs::write(&target, &tampered).unwrap();
+
+    bin()
+        .args([
+            "--json",
+            "--config",
+            target.to_str().unwrap(),
+            "config",
+            "validate",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+
+    let after = fs::read(&target).unwrap();
+    assert_eq!(
+        after, tampered,
+        "config validate must never modify its target"
+    );
+}
+
+#[test]
+fn config_validate_human_mode_failure_prints_the_error_line_to_stderr_only() {
+    let (_tmp, missing) = nonexistent_config_path();
+    let assert = bin()
+        .args(["--config", missing.to_str().unwrap(), "config", "validate"])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    assert!(String::from_utf8_lossy(&out.stdout).is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("CONFIG_INVALID"), "{stderr}");
 }
 
 // OFF-020 (Windows platform default config path formula): with `--config`
@@ -469,6 +779,225 @@ fn query_missing_wiki_is_argument_invalid() {
         .code(2);
     let v = stdout_json(&assert);
     assert_eq!(v["error"]["code"], "ARGUMENT_INVALID");
+}
+
+// PRD 08-07-first-run-config-and-query-ux-fixes D4/AC3: both traps a
+// first-run user hits -- a bare positional question (missing the `--`
+// separator) and a `query -- "q"` with no `--wiki` -- now name the correct
+// invocation shape rather than leaving the caller with only clap's raw
+// "unexpected argument" text or a bare "requires exactly one --wiki". The
+// `--` requirement itself and the missing-`--wiki` rejection are unchanged
+// (still `ARGUMENT_INVALID`, still exit 2); only the message text changed.
+#[test]
+fn query_without_separator_names_the_correct_invocation_shape() {
+    let reg = minimal_registry(None, "\"claude\"");
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "query",
+            "--wiki",
+            "demo",
+            "question text with no -- separator",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let v = stdout_json(&assert);
+    assert_eq!(v["error"]["code"], "ARGUMENT_INVALID");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains(r#"llm-wikis query --wiki <id> -- "<question>""#),
+        "{message}"
+    );
+}
+
+#[test]
+fn query_missing_wiki_message_names_the_correct_invocation_shape() {
+    let reg = minimal_registry(None, "\"claude\"");
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "query",
+            "--",
+            "x",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let v = stdout_json(&assert);
+    assert_eq!(v["error"]["code"], "ARGUMENT_INVALID");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains(r#"llm-wikis query --wiki <id> -- "<question>""#),
+        "{message}"
+    );
+}
+
+#[test]
+fn query_without_separator_still_emits_exactly_one_json_document() {
+    let reg = minimal_registry(None, "\"claude\"");
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "query",
+            "--wiki",
+            "demo",
+            "question text with no -- separator",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        text.matches('\n').count(),
+        1,
+        "exactly one line of output: {text:?}"
+    );
+    assert!(out.stderr.is_empty());
+}
+
+// PRD 08-07-first-run-config-and-query-ux-fixes D8: a first-run operator
+// trying to check more than one agent in a single `doctor --live` (either a
+// comma-separated `--agent claude,codex`, or a repeated `--agent claude
+// --agent codex`) hits two different clap error kinds -- `InvalidValue`
+// (comma-separated: `--agent` is a `ValueEnum`, so the whole joined string
+// fails to match either variant) and `ArgumentConflict` (repeated: the flag
+// itself isn't repeatable) -- and both now carry a reminder that `doctor
+// --live` checks exactly one (wiki, agent) pair per run, rather than
+// clap's bare "invalid value"/"cannot be used multiple times" text alone.
+// Neither changes the `--live` one-pair-per-run requirement itself, the
+// `ARGUMENT_INVALID` code, or the exit code (2) -- message text only. A
+// bogus `--config` path is enough here: this is a pure clap parse failure,
+// never reaching config resolution at all.
+#[test]
+fn doctor_comma_separated_agent_value_names_the_one_pair_per_run_rule() {
+    let (_tmp, config_path) = nonexistent_config_path();
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            config_path.to_str().unwrap(),
+            "doctor",
+            "--wiki",
+            "demo",
+            "--agent",
+            "claude,codex",
+            "--live",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let v = stdout_json(&assert);
+    assert_eq!(v["error"]["code"], "ARGUMENT_INVALID");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("doctor runs one wiki/agent pair at a time"),
+        "{message}"
+    );
+    assert!(
+        message.contains("llm-wikis doctor --wiki <id> --agent claude --live"),
+        "{message}"
+    );
+}
+
+#[test]
+fn doctor_repeated_agent_flag_names_the_one_pair_per_run_rule() {
+    let (_tmp, config_path) = nonexistent_config_path();
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            config_path.to_str().unwrap(),
+            "doctor",
+            "--wiki",
+            "demo",
+            "--agent",
+            "claude",
+            "--agent",
+            "codex",
+            "--live",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let v = stdout_json(&assert);
+    assert_eq!(v["error"]["code"], "ARGUMENT_INVALID");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("doctor runs one wiki/agent pair at a time"),
+        "{message}"
+    );
+}
+
+/// `doctor --live` still emits exactly one JSON document for this error
+/// shape too (same contract as `query_without_separator_still_emits_exactly_one_json_document`).
+#[test]
+fn doctor_comma_separated_agent_value_still_emits_exactly_one_json_document() {
+    let (_tmp, config_path) = nonexistent_config_path();
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            config_path.to_str().unwrap(),
+            "doctor",
+            "--wiki",
+            "demo",
+            "--agent",
+            "claude,codex",
+            "--live",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        text.matches('\n').count(),
+        1,
+        "exactly one line of output: {text:?}"
+    );
+    assert!(out.stderr.is_empty());
+}
+
+/// `query`'s own comma-separated `--agent` error is the same clap
+/// `InvalidValue` kind as doctor's, sharing the exact `--agent` declaration
+/// -- deliberately gets `query`'s own D4 usage hint (never doctor's), since
+/// it is a `query`-scoped parse failure.
+#[test]
+fn query_comma_separated_agent_value_gets_the_query_usage_hint_not_doctors() {
+    let reg = minimal_registry(None, "\"claude\"");
+    let assert = bin()
+        .args([
+            "--json",
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "query",
+            "--agent",
+            "claude,codex",
+            "--",
+            "q",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let v = stdout_json(&assert);
+    assert_eq!(v["error"]["code"], "ARGUMENT_INVALID");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains(r#"llm-wikis query --wiki <id> -- "<question>""#),
+        "{message}"
+    );
+    assert!(
+        !message.contains("doctor runs one wiki/agent pair at a time"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -806,6 +1335,92 @@ fn human_mode_never_prints_json_on_stdout_for_an_argument_failure() {
         .code(2);
     let out = assert.get_output();
     assert!(!String::from_utf8_lossy(&out.stdout).contains('{'));
+    // PRD 08-06-pre-0-1-0-cli-refinements D2/AC3: the human-mode companion
+    // of `json_mode_emits_exactly_one_document_even_for_a_top_level_parse_failure`
+    // — stdout is fully empty and the error line lands on stderr instead.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.is_empty(), "{stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("ARGUMENT_INVALID"), "{stderr}");
+}
+
+// ---------------------------------------------------------------------------
+// Human-mode error lines on stderr, end to end through the real binary, for
+// every subcommand (PRD 08-06-pre-0-1-0-cli-refinements D2/AC3). The two
+// tests above only exercise *pre-dispatch* clap parse failures; these four
+// prove the same routing for a failure reached after a subcommand handler
+// actually ran.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_human_mode_failure_prints_the_error_line_to_stderr_only() {
+    let (_tmp, missing) = nonexistent_config_path();
+    let assert = bin()
+        .args(["--config", missing.to_str().unwrap(), "list"])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    assert!(String::from_utf8_lossy(&out.stdout).is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("CONFIG_INVALID"), "{stderr}");
+}
+
+#[test]
+fn doctor_human_mode_failure_prints_the_error_line_to_stderr_only() {
+    let (_tmp, missing) = nonexistent_config_path();
+    let assert = bin()
+        .args(["--config", missing.to_str().unwrap(), "doctor"])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    assert!(String::from_utf8_lossy(&out.stdout).is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("CONFIG_INVALID"), "{stderr}");
+}
+
+#[test]
+fn config_init_human_mode_failure_prints_the_error_line_to_stderr_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("config.toml");
+    let target_str = target.display().to_string();
+    bin()
+        .args(["--config", &target_str, "config", "init"])
+        .assert()
+        .success();
+
+    let assert = bin()
+        .args(["--config", &target_str, "config", "init"])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    assert!(String::from_utf8_lossy(&out.stdout).is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("CONFIG_EXISTS"), "{stderr}");
+}
+
+#[test]
+fn query_human_mode_failure_prints_the_error_line_to_stderr_only() {
+    let reg = minimal_registry(None, "\"claude\"");
+    let assert = bin()
+        .args([
+            "--config",
+            reg.config_path.to_str().unwrap(),
+            "query",
+            "--wiki",
+            "all",
+            "--",
+            "x",
+        ])
+        .assert()
+        .failure()
+        .code(2);
+    let out = assert.get_output();
+    assert!(String::from_utf8_lossy(&out.stdout).is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("ARGUMENT_INVALID"), "{stderr}");
 }
 
 // ---------------------------------------------------------------------------
@@ -1512,9 +2127,48 @@ skill_path = ".claude/skills/wiki-query/SKILL.md"
             answer_pos < warnings_pos,
             "answer must print before warnings: {human_out:?}"
         );
+        // PRD 08-06-pre-0-1-0-cli-refinements AC2: `assert_cmd` always
+        // captures stderr through an OS pipe, never a pty, so
+        // `stderr.is_terminal()` is deterministically false here and the
+        // spinner branch is never entered — stderr must be completely
+        // empty on a successful human-mode run.
+        assert!(
+            human_assert.get_output().stderr.is_empty(),
+            "no spinner bytes or diagnostics expected under a piped stderr: {:?}",
+            String::from_utf8_lossy(&human_assert.get_output().stderr)
+        );
+
+        // PRD 08-08-pre-0-1-0-cli-skills-markdown-init AC2: `assert_cmd`
+        // never provides a controlling terminal, so `--plain` and its
+        // absence both hit the "not a TTY" branch of `emit_query`'s routing
+        // — this guards against a future refactor moving the `--plain`
+        // check to the wrong side of the TTY check, since today it cannot
+        // observe any actual behavior difference.
+        let mut plain_cmd = bin();
+        common_env(&mut plain_cmd);
+        let plain_assert = plain_cmd
+            .args([
+                "--config",
+                fixture.config_path.to_str().unwrap(),
+                "query",
+                "--wiki",
+                "demo",
+                "--agent",
+                "claude",
+                "--plain",
+                "--",
+                question,
+            ])
+            .assert()
+            .success();
+        assert_eq!(
+            plain_assert.get_output().stdout,
+            human_assert.get_output().stdout,
+            "--plain must be byte-identical to the flag-omitted case under a piped stdout"
+        );
 
         // Sanity: the wiki fixture's content root was never mutated by any
-        // of the three real subprocess invocations above.
+        // of the real subprocess invocations above.
         let home_contents = fs::read(fixture.wiki_root.join("home.md")).unwrap();
         assert_eq!(home_contents, b"# Home\nFixture content.\n");
     }

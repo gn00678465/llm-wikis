@@ -1,0 +1,3 @@
+{"reason":"seed row — add real entries via: task.ts add-context <name> <implement|check> <file> <reason>"}
+{"file":"src/cli.rs","reason":"emit_query(~839) 是渲染掛點，現為 render_markdown_ansi；IsTerminal/NO_COLOR/--plain 判斷邏輯保留、只換渲染後端"}
+{"file":"src/output.rs","reason":"DOCTOR_CHECK_NAMES(14) 與 WrapperWarningCode(64-77) 兩個封閉詞彙表要擴充；render_markdown_ansi(194-210) 要移除"}

@@ -45,6 +45,32 @@ fn generated_file_contains_a_commented_wiki_example() {
     );
 }
 
+// PRD 08-07-first-run-config-and-query-ux-fixes D2/AC1: the example wiki
+// paths are single-quoted TOML literal strings (never double-quoted), plus
+// a comment explaining the three legal Windows-path spellings -- the exact
+// trap a Windows user hit pasting a double-quoted backslash path (spec
+// TOML's basic-string escaping) into their own hand-edited registry.
+#[test]
+fn generated_file_example_paths_are_single_quoted_with_a_windows_quoting_note() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("config.toml");
+    init(&target).unwrap();
+    let text = fs::read_to_string(&target).unwrap();
+    assert!(
+        text.contains("# project_root = '/absolute/path/to/example'"),
+        "{text}"
+    );
+    assert!(
+        text.contains("# content_root = '/absolute/path/to/example'"),
+        "{text}"
+    );
+    assert!(
+        text.contains("single-quoted literal string"),
+        "expected a Windows path-quoting note: {text}"
+    );
+    assert!(!text.contains("\"/absolute/path/to/example\""));
+}
+
 #[test]
 fn create_new_semantics_refuse_to_overwrite_or_merge() {
     let tmp = tempfile::tempdir().unwrap();

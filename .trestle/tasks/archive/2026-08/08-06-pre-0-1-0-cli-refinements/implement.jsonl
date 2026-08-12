@@ -1,0 +1,6 @@
+{"reason":"seed row — add real entries via: task.ts add-context <name> <implement|check> <file> <reason>"}
+{"file":"src/cli.rs","reason":"All four features touch dispatch/emit here: new config show/validate handlers, spinner wiring around run_query_command, and every println error site moving to eprintln"}
+{"file":"src/providers/claude.rs","reason":"build_argv gains --append-system-prompt and --setting-sources project; TOOLS stays Read,Grep,Glob per D4"}
+{"file":"src/providers/codex.rs","reason":"build_argv gains -c developer_instructions=<text> (TOML round-trip caveat, research §4)"}
+{"file":"src/config.rs","reason":"Config::load and envelope types back the new config show/validate subcommands"}
+{"file":"docs/2026-07-28-llm-wikis-external-query-design.md","reason":"spec must mirror every argv/output-contract change or tests/spec_drift.rs fails"}

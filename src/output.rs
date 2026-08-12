@@ -11,7 +11,7 @@ pub const SCHEMA_VERSION: &str = "1.0";
 
 /// Doctor `checks[].name` vocabulary (spec §15). Defined here for later tasks
 /// (doctor implementation) and consumed today only by the spec-drift test.
-pub const DOCTOR_CHECK_NAMES: [&str; 9] = [
+pub const DOCTOR_CHECK_NAMES: [&str; 10] = [
     "config",
     "roots",
     "wiki_structure",
@@ -21,6 +21,10 @@ pub const DOCTOR_CHECK_NAMES: [&str; 9] = [
     "read_scope",
     "live_contract",
     "mutation",
+    // Appended last, and emitted last within every pair's `checks`, so the
+    // nine pre-existing entries keep their positions for consumers that index
+    // rather than search (issue #8; task 08-12 design.md §3).
+    "viewer",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,14 +70,19 @@ pub enum WrapperWarningCode {
     ClaudeReadScopeBroad,
     CodexReadScopeBroad,
     ClaudeEnabledPluginsDeclared,
+    /// The configured terminal markdown viewer cannot render (issue #8). A
+    /// warning rather than an error on purpose: the answer itself is complete
+    /// and correct, only its presentation degrades to raw markdown.
+    ViewerUnavailable,
 }
 
 impl WrapperWarningCode {
-    pub const ALL: [WrapperWarningCode; 4] = [
+    pub const ALL: [WrapperWarningCode; 5] = [
         WrapperWarningCode::WikiSchemaAbsent,
         WrapperWarningCode::ClaudeReadScopeBroad,
         WrapperWarningCode::CodexReadScopeBroad,
         WrapperWarningCode::ClaudeEnabledPluginsDeclared,
+        WrapperWarningCode::ViewerUnavailable,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -82,6 +91,7 @@ impl WrapperWarningCode {
             WrapperWarningCode::ClaudeReadScopeBroad => "CLAUDE_READ_SCOPE_BROAD",
             WrapperWarningCode::CodexReadScopeBroad => "CODEX_READ_SCOPE_BROAD",
             WrapperWarningCode::ClaudeEnabledPluginsDeclared => "CLAUDE_ENABLED_PLUGINS_DECLARED",
+            WrapperWarningCode::ViewerUnavailable => "VIEWER_UNAVAILABLE",
         }
     }
 }
@@ -159,13 +169,21 @@ pub fn render_json(envelope: &QueryEnvelope) -> String {
 
 /// Renders the human-readable form: the answer, then gaps, then warnings, in that
 /// order (spec plan Task 4, Step 4).
+///
+/// Renders only the success shape (`answer`/`gaps`/`warnings`) — a failing
+/// envelope's human-readable error line is `cli.rs`'s responsibility, not
+/// this function's (PRD 08-06-pre-0-1-0-cli-refinements D2/AC3): the error
+/// line belongs on stderr, never stdout, and stream routing is a `cli.rs`
+/// concern this pure formatter does not own. Every `QueryEnvelope` this
+/// codebase constructs has `answer: None` exactly when `error: Some(_)`
+/// (see `query_failure_envelope`/`QueryService`'s own success/failure
+/// split), so `emit_query` never calls this function at all on a failing
+/// envelope — it renders the error line itself instead.
 pub fn render_human(envelope: &QueryEnvelope) -> String {
     let mut out = String::new();
     if let Some(answer) = &envelope.answer {
         out.push_str(answer);
         out.push('\n');
-    } else if let Some(err) = &envelope.error {
-        out.push_str(&format!("error: {} ({})\n", err.code.as_str(), err.message));
     }
     if !envelope.gaps.is_empty() {
         out.push_str("\nGaps:\n");

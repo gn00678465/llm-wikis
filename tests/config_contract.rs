@@ -6,12 +6,14 @@ use std::fs;
 use std::path::Path;
 
 use llm_wikis::config::{
-    Config, LoadMode, MapEnv, Platform, ProviderWikiConfig, WikiConfig,
-    check_claude_wiki_settings_surface, default_cache_path, default_config_path,
-    resolve_and_check_artifact, resolve_wiki_roots, validate_config_override, validate_entrypoint,
-    validate_executable, validate_query_prompt,
+    Config, INIT_TEMPLATE, LoadMode, MapEnv, Platform, ProviderWikiConfig, ViewerBackend,
+    WikiConfig, check_claude_wiki_settings_surface, config_list_envelope,
+    config_list_error_envelope, config_validate_envelope, config_validate_error_envelope,
+    default_cache_path, default_config_path, render_init_template, resolve_and_check_artifact,
+    resolve_wiki_roots, validate_config_override, validate_entrypoint, validate_executable,
+    validate_query_prompt,
 };
-use llm_wikis::error::ErrorCode;
+use llm_wikis::error::{AppError, ErrorCode};
 use llm_wikis::output::Agent;
 
 fn env(pairs: &[(&str, &str)]) -> MapEnv {
@@ -205,6 +207,73 @@ fn two_wiki_registry_matches_section_6_example() {
     );
 }
 
+// PRD 08-07-first-run-config-and-query-ux-fixes D2/AC1: `config.example.toml`
+// gets the same single-quoted-path treatment as the `config init` template,
+// plus its own copy of the Windows path-quoting note.
+#[test]
+fn config_example_toml_uses_single_quoted_paths_with_a_windows_quoting_note() {
+    let text = include_str!("../config.example.toml");
+    assert!(text.contains("project_root = 'D:/Wikis/agents'"), "{text}");
+    assert!(text.contains("content_root = 'D:/Wikis/agents'"), "{text}");
+    assert!(
+        text.contains("project_root = 'D:/Wikis/harness-engineering'"),
+        "{text}"
+    );
+    assert!(
+        text.contains("content_root = 'D:/Wikis/harness-engineering/wiki'"),
+        "{text}"
+    );
+    assert!(
+        text.contains("single-quoted literal string"),
+        "expected a Windows path-quoting note: {text}"
+    );
+}
+
+// PRD 08-07-first-run-config-and-query-ux-fixes D3/AC2: a hand-edited config
+// with an unescaped backslash inside a TOML basic (double-quoted) string --
+// the exact trap a Windows user hits pasting `content_root =
+// "E:\not_company\..."` -- must fail `CONFIG_INVALID` with a message that
+// also names the three legal spellings. Every other TOML parse failure
+// (unclosed table, missing value, ...) keeps its original message shape.
+#[test]
+fn backslash_escape_toml_error_carries_the_windows_path_hint() {
+    let text = "content_root = \"E:\\not_company\\wiki\"\n";
+    let err = Config::load_str(text).unwrap_err();
+    assert_eq!(err.code, ErrorCode::ConfigInvalid);
+    assert!(
+        err.message.contains("single-quoted literal string"),
+        "{}",
+        err.message
+    );
+    assert!(err.message.contains("forward slashes"), "{}", err.message);
+    assert!(
+        err.message.contains("double the backslashes") || err.message.contains("doubled"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn non_escape_toml_errors_do_not_carry_the_windows_path_hint() {
+    let unclosed_table = "[wikis.demo\n";
+    let err = Config::load_str(unclosed_table).unwrap_err();
+    assert_eq!(err.code, ErrorCode::ConfigInvalid);
+    assert!(
+        !err.message.contains("single-quoted literal string"),
+        "{}",
+        err.message
+    );
+
+    let missing_value = "content_root = \n";
+    let err2 = Config::load_str(missing_value).unwrap_err();
+    assert_eq!(err2.code, ErrorCode::ConfigInvalid);
+    assert!(
+        !err2.message.contains("single-quoted literal string"),
+        "{}",
+        err2.message
+    );
+}
+
 #[test]
 fn unknown_top_level_key_rejected() {
     let text = format!("{BASE_HEADER}\nquery_profiles = []\n");
@@ -321,6 +390,173 @@ fn provider_executable_with_arguments_or_shell_syntax_rejected() {
         let err = validate_executable(bad).unwrap_err();
         assert_eq!(err.code, ErrorCode::ConfigInvalid, "{bad}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// `[viewer]` section (issue #8)
+// ---------------------------------------------------------------------------
+
+fn config_with_viewer(section: &str) -> String {
+    format!("{BASE_HEADER}\n{section}")
+}
+
+#[test]
+fn viewer_section_absent_defaults_to_the_leaf_backend() {
+    let cfg = Config::load_str(BASE_HEADER).expect("no [viewer] section is still valid");
+    assert_eq!(cfg.viewer.backend, ViewerBackend::Leaf);
+    assert_eq!(cfg.viewer.executable, None);
+}
+
+#[test]
+fn viewer_backend_accepts_both_supported_values() {
+    for (text, expected) in [
+        ("plain", ViewerBackend::Plain),
+        ("leaf", ViewerBackend::Leaf),
+    ] {
+        let cfg = Config::load_str(&config_with_viewer(&format!(
+            "[viewer]\nbackend = \"{text}\"\n"
+        )))
+        .unwrap_or_else(|e| panic!("backend {text:?} must be accepted: {e:?}"));
+        assert_eq!(cfg.viewer.backend, expected);
+    }
+}
+
+#[test]
+fn viewer_backend_rejects_unknown_values() {
+    for bad in ["termimad", "glow", "", "Leaf"] {
+        let text = config_with_viewer(&format!("[viewer]\nbackend = \"{bad}\"\n"));
+        let err = Config::load_str(&text).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ConfigInvalid, "backend {bad:?}");
+    }
+}
+
+#[test]
+fn viewer_executable_is_validated_like_a_provider_executable() {
+    let good = config_with_viewer("[viewer]\nbackend = \"leaf\"\nexecutable = \"leaf.exe\"\n");
+    assert!(Config::load_str(&good).is_ok());
+
+    for bad in ["leaf --inline", "./leaf", "leaf; rm -rf /", ""] {
+        let text = config_with_viewer(&format!(
+            "[viewer]\nbackend = \"leaf\"\nexecutable = \"{bad}\"\n"
+        ));
+        let err = Config::load_str(&text).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ConfigInvalid, "executable {bad:?}");
+    }
+}
+
+// PRD D12: `fallback` is deliberately NOT a key — it would have exactly one
+// legal value. The fallback behavior itself is unconditional, so the strict
+// schema must reject the key rather than silently accept a no-op.
+#[test]
+fn viewer_rejects_a_fallback_key() {
+    let text = config_with_viewer("[viewer]\nbackend = \"leaf\"\nfallback = \"plain\"\n");
+    let err = Config::load_str(&text).unwrap_err();
+    assert_eq!(err.code, ErrorCode::ConfigInvalid);
+}
+
+// ---------------------------------------------------------------------------
+// Optional provider `model` / `effort` (issue #7)
+// ---------------------------------------------------------------------------
+
+/// Builds a registry whose `[providers.claude]` table carries the supplied
+/// extra lines; codex keeps the plain declaration so only one side varies.
+fn config_with_claude_provider_lines(extra: &str) -> String {
+    format!(
+        "config_version = 1\n\n[providers.claude]\nexecutable = \"claude\"\n{extra}\n[providers.codex]\nexecutable = \"codex\"\n"
+    )
+}
+
+#[test]
+fn provider_model_and_effort_are_optional_and_default_to_none() {
+    let cfg = Config::load_str(BASE_HEADER).expect("no model/effort is still valid");
+    let claude = cfg.providers.claude.as_ref().unwrap();
+    assert_eq!(claude.model, None);
+    assert_eq!(claude.effort, None);
+}
+
+#[test]
+fn provider_model_and_effort_round_trip() {
+    let text = config_with_claude_provider_lines("model = \"opus\"\neffort = \"high\"\n");
+    let cfg = Config::load_str(&text).expect("model/effort are accepted");
+    let claude = cfg.providers.claude.as_ref().unwrap();
+    assert_eq!(claude.model.as_deref(), Some("opus"));
+    assert_eq!(claude.effort.as_deref(), Some("high"));
+}
+
+// Aliases and fully qualified model IDs both have to survive: the point of
+// issue #7's validation rules is that a future model ID shape must not need a
+// deserialization-schema edit before an operator can name it.
+#[test]
+fn provider_model_accepts_aliases_and_full_ids() {
+    for good in [
+        "opus",
+        "gpt-5.6-sol",
+        "claude-opus-4-1-20250805",
+        "us.anthropic.claude-opus-4-1",
+        "claude-opus-5[1m]",
+    ] {
+        let text = config_with_claude_provider_lines(&format!("model = \"{good}\"\n"));
+        assert!(
+            Config::load_str(&text).is_ok(),
+            "expected acceptance for model {good:?}"
+        );
+    }
+}
+
+#[test]
+fn provider_model_rejects_empty_control_characters_whitespace_and_overlong_values() {
+    let overlong = "m".repeat(129);
+    for bad in [
+        "",
+        "opus\nmore",
+        "opus\\u0007",
+        "opus high",
+        "--model",
+        overlong.as_str(),
+    ] {
+        let text = config_with_claude_provider_lines(&format!("model = \"{bad}\"\n"));
+        let err = Config::load_str(&text).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ConfigInvalid, "model {bad:?}");
+    }
+}
+
+// The effort token set stays deliberately open — provider CLIs own the
+// question of which values a given model supports — so this pins the
+// safe-token shape only, never a value enum.
+#[test]
+fn provider_effort_accepts_every_currently_documented_value() {
+    for good in ["minimal", "low", "medium", "high", "xhigh", "max"] {
+        let text = config_with_claude_provider_lines(&format!("effort = \"{good}\"\n"));
+        assert!(
+            Config::load_str(&text).is_ok(),
+            "expected acceptance for effort {good:?}"
+        );
+    }
+}
+
+#[test]
+fn provider_effort_rejects_empty_unsafe_tokens_and_overlong_values() {
+    let overlong = "e".repeat(33);
+    for bad in [
+        "",
+        "high low",
+        "high\nlow",
+        "high;rm -rf /",
+        "-high",
+        "high=low",
+        overlong.as_str(),
+    ] {
+        let text = config_with_claude_provider_lines(&format!("effort = \"{bad}\"\n"));
+        let err = Config::load_str(&text).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ConfigInvalid, "effort {bad:?}");
+    }
+}
+
+#[test]
+fn codex_provider_table_validates_model_and_effort_too() {
+    let text = "config_version = 1\n\n[providers.claude]\nexecutable = \"claude\"\n\n[providers.codex]\nexecutable = \"codex\"\nmodel = \"\"\n";
+    let err = Config::load_str(text).unwrap_err();
+    assert_eq!(err.code, ErrorCode::ConfigInvalid);
 }
 
 const FORBIDDEN_KEYS: [&str; 8] = [
@@ -1213,4 +1449,163 @@ fn non_object_json_fails_closed() {
     let project = settings_project(tmp.path(), "settings.json", "[1,2,3]");
     let err = check_claude_wiki_settings_surface(&project).unwrap_err();
     assert_eq!(err.code, ErrorCode::EntrypointInvalid);
+}
+
+// ---------------------------------------------------------------------------
+// `config list` / `config validate` envelopes (PRD
+// 08-06-pre-0-1-0-cli-refinements AC1; subcommand renamed from `show` to
+// `list` per D7). Both reuse `Config::load` exactly; no new `ErrorCode`
+// variant is introduced by either.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_list_envelope_success_matches_the_exact_contract() {
+    let text = include_str!("../config.example.toml");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(&path, text).unwrap();
+
+    let envelope = config_list_envelope(&path);
+    assert!(envelope.ok);
+    assert_eq!(envelope.operation, "config_list");
+    assert_eq!(envelope.schema_version, "1.0");
+    assert_eq!(envelope.path, path.display().to_string());
+    assert!(envelope.error.is_none());
+    let config = envelope.config.as_ref().expect("config present on success");
+    assert_eq!(config.wikis.len(), 2);
+
+    let value = serde_json::to_value(&envelope).unwrap();
+    let keys: std::collections::BTreeSet<String> =
+        value.as_object().unwrap().keys().cloned().collect();
+    assert_eq!(
+        keys,
+        ["schema_version", "ok", "operation", "path", "config"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    );
+    // The full config round-trips through serde: a spot check on a nested
+    // field proves the Serialize derive actually reached the wiki tables,
+    // not just the top-level struct.
+    assert_eq!(
+        value["config"]["wikis"]["agents"]["title"],
+        "Agents Knowledge Base"
+    );
+}
+
+#[test]
+fn config_list_envelope_failure_carries_no_config_and_the_public_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("does-not-exist.toml");
+    let envelope = config_list_envelope(&missing);
+    assert!(!envelope.ok);
+    assert_eq!(envelope.operation, "config_list");
+    assert!(envelope.config.is_none());
+    let err = envelope.error.as_ref().expect("error object present");
+    assert_eq!(err.code, ErrorCode::ConfigInvalid);
+
+    let value = serde_json::to_value(&envelope).unwrap();
+    let obj = value.as_object().unwrap();
+    assert_eq!(obj.get("ok").unwrap(), false);
+    assert!(!obj.contains_key("config"));
+    assert!(obj.contains_key("error"));
+}
+
+#[test]
+fn config_list_error_envelope_used_only_when_the_path_itself_cannot_resolve() {
+    let err = AppError::new(ErrorCode::ArgumentInvalid, "relative --config override");
+    let envelope = config_list_error_envelope(err);
+    assert!(!envelope.ok);
+    assert_eq!(envelope.operation, "config_list");
+    assert_eq!(envelope.path, "");
+    assert_eq!(
+        envelope.error.as_ref().unwrap().code,
+        ErrorCode::ArgumentInvalid
+    );
+}
+
+#[test]
+fn config_validate_envelope_success_never_echoes_the_parsed_config() {
+    let text = include_str!("../config.example.toml");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    fs::write(&path, text).unwrap();
+
+    let envelope = config_validate_envelope(&path);
+    assert!(envelope.ok);
+    assert_eq!(envelope.operation, "config_validate");
+    assert_eq!(envelope.schema_version, "1.0");
+    assert_eq!(envelope.path, path.display().to_string());
+    assert!(envelope.error.is_none());
+
+    let value = serde_json::to_value(&envelope).unwrap();
+    let keys: std::collections::BTreeSet<String> =
+        value.as_object().unwrap().keys().cloned().collect();
+    assert_eq!(
+        keys,
+        ["schema_version", "ok", "operation", "path"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        "config validate's envelope must never carry a config field"
+    );
+}
+
+#[test]
+fn config_validate_envelope_failure_carries_the_public_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bad = tmp.path().join("bad.toml");
+    fs::write(&bad, "config_version = 2\n").unwrap();
+
+    let envelope = config_validate_envelope(&bad);
+    assert!(!envelope.ok);
+    assert_eq!(envelope.operation, "config_validate");
+    let err = envelope.error.as_ref().expect("error object present");
+    assert_eq!(err.code, ErrorCode::ConfigInvalid);
+}
+
+#[test]
+fn config_validate_error_envelope_used_only_when_the_path_itself_cannot_resolve() {
+    let err = AppError::new(ErrorCode::ArgumentInvalid, "relative --config override");
+    let envelope = config_validate_error_envelope(err);
+    assert!(!envelope.ok);
+    assert_eq!(envelope.operation, "config_validate");
+    assert_eq!(envelope.path, "");
+    assert_eq!(
+        envelope.error.as_ref().unwrap().code,
+        ErrorCode::ArgumentInvalid
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `render_init_template` (PRD 08-08-pre-0-1-0-cli-skills-markdown-init D4,
+// design.md §2.3): the wizard's default-argument output must stay
+// byte-identical to the pre-existing INIT_TEMPLATE constant, so the
+// non-interactive/`--yes` code paths that keep calling `init()`/`INIT_TEMPLATE`
+// directly never silently drift from what the wizard would produce with
+// every prompt left at its default.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn render_init_template_default_arguments_match_init_template_byte_for_byte() {
+    let rendered = render_init_template(Some(Agent::Claude), "claude", "codex");
+    assert_eq!(rendered, INIT_TEMPLATE);
+}
+
+#[test]
+fn render_init_template_substitutes_default_agent_and_executables() {
+    let rendered = render_init_template(Some(Agent::Codex), "my-claude", "my-codex");
+    assert!(rendered.contains("default_agent = \"codex\""));
+    assert!(rendered.contains("executable = \"my-claude\""));
+    assert!(rendered.contains("executable = \"my-codex\""));
+    assert!(!rendered.contains("default_agent = \"claude\""));
+}
+
+#[test]
+fn render_init_template_omits_default_agent_line_when_none() {
+    let rendered = render_init_template(None, "claude", "codex");
+    assert!(!rendered.contains("default_agent"));
+    // Still a valid, loadable document (default_agent is an optional field).
+    let cfg = Config::load_str(&rendered).expect("must remain a valid zero-wiki registry");
+    assert!(cfg.default_agent.is_none());
 }

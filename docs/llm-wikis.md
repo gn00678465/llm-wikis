@@ -34,21 +34,21 @@ irm https://raw.githubusercontent.com/gn00678465/llm-wikis/refs/heads/main/insta
 
 Both scripts install the **latest** published release by default —
 specifically the newest tag *not* marked as a GitHub pre-release; a tag such
-as `v0.1.0-beta.1` is never picked up by an unpinned run. If no stable
+as `v0.1.0-beta.4` is never picked up by an unpinned run. If no stable
 (non-prerelease) tag has been published yet, an unpinned run fails with an
 explicit message telling you to set `LLM_WIKIS_VERSION`, instead of a bare
-download error. Set `LLM_WIKIS_VERSION` (an exact tag, e.g. `v0.1.0-beta.1`)
+download error. Set `LLM_WIKIS_VERSION` (an exact tag, e.g. `v0.1.0-beta.4`)
 before running either script to install a specific version instead — this
 pins, upgrades, or downgrades in place:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/gn00678465/llm-wikis/refs/heads/main/install.sh | LLM_WIKIS_VERSION=v0.1.0-beta.1 sh
+curl -fsSL https://raw.githubusercontent.com/gn00678465/llm-wikis/refs/heads/main/install.sh | LLM_WIKIS_VERSION=v0.1.0-beta.4 sh
 ```
 
-(The variable must be scoped to `sh` — the process that actually reads it — not to `curl`. `LLM_WIKIS_VERSION=v0.1.0-beta.1 curl ... | sh` sets the variable only for `curl`'s environment and never reaches the piped `sh`.)
+(The variable must be scoped to `sh` — the process that actually reads it — not to `curl`. `LLM_WIKIS_VERSION=v0.1.0-beta.4 curl ... | sh` sets the variable only for `curl`'s environment and never reaches the piped `sh`.)
 
 ```powershell
-$env:LLM_WIKIS_VERSION = "v0.1.0-beta.1"
+$env:LLM_WIKIS_VERSION = "v0.1.0-beta.4"
 irm https://raw.githubusercontent.com/gn00678465/llm-wikis/refs/heads/main/install.ps1 | iex
 ```
 
@@ -183,19 +183,57 @@ testing feature**, not a caller-facing one:
 Use `--config` for local testing, CI, or deliberately running against a
 second, non-default registry — not as a request-time parameter.
 
-### 2.3 `config init` never overwrites
+### 2.3 `config init`: wizard on a terminal, template otherwise, never merges
 
 ```powershell
 llm-wikis config init
+llm-wikis config init --yes
+llm-wikis config init --force
 llm-wikis --config C:\path\to\alt-config.toml config init
 ```
 
-Creates the parent directory (if needed) and a valid, non-interactive
-starter config — runtime/provider defaults, an **empty** wiki registry, and
-one commented example wiki block — **only when the destination does not
-already exist**. An existing destination fails closed with `CONFIG_EXISTS`
-(exit `2`); it is never merged or overwritten. There is no wizard and no
-`config add-wiki` command in 0.1.0 — add wikis by hand-editing the TOML.
+Creates the parent directory (if needed) and a valid starter config —
+runtime/provider defaults, an **empty** wiki registry, and one commented
+example wiki block.
+
+- **Piped/scripted, `--json`, or `--yes`** (including every non-interactive
+  invocation — an agent driving this CLI, CI, a script): writes the fixed
+  template directly, no prompts.
+- **A real terminal (both stdin and stdout are a TTY), without `--json` and
+  without `--yes`**: runs a short interactive wizard — `default_agent`
+  (a Select) and each provider's `executable` (a Text prompt, Enter accepts
+  the shown default) — then writes the customized template. `--yes` skips
+  this even on a TTY.
+- If the destination **already exists**: `--force` always overwrites
+  without asking; without `--force`, a non-interactive invocation fails
+  closed with `CONFIG_EXISTS` (exit `2`), and a TTY invocation instead asks
+  to confirm the overwrite (default: do not overwrite — declining leaves
+  `CONFIG_EXISTS` and the file untouched).
+- It is **never merged** — an overwrite (confirmed, or via `--force`)
+  replaces the whole file.
+
+There is no `config add-wiki` command in 0.1.0 — add wikis by hand-editing
+the TOML (§2.4).
+
+### 2.3a `config list` and `config validate`
+
+```powershell
+llm-wikis config list
+llm-wikis config validate
+```
+
+`config list` loads the configuration the same way every other subcommand
+does (`--config` override, else the platform-native default) and prints the
+resolved document — the parsed configuration after its own field-level
+defaulting, never additionally filesystem-canonicalized per wiki (that stays
+`doctor`'s job). It is a different command from the top-level `llm-wikis
+list`, which enumerates registered wikis rather than the whole
+configuration document; the `config` prefix distinguishes the two on the
+command line. `config validate` performs the identical load-and-validate
+step but never echoes the document back and never writes anything — useful
+in a pre-commit hook or CI step that only needs a pass/fail signal. Neither
+starts a provider; both reuse the same error codes/exit classes as every
+other config-loading subcommand (most commonly `CONFIG_INVALID`, exit `2`).
 
 ### 2.4 Registering wikis
 
@@ -291,6 +329,69 @@ Use this to point at a specific install (a pinned version, a wrapper script
 location, a non-default install directory) instead of whatever `claude`/
 `codex` resolves to on `PATH`.
 
+On Windows a bare name resolves through `PATHEXT` first, across the whole
+`PATH`; an extensionless file is only used when no `PATHEXT` candidate exists
+anywhere. So `executable = "codex"` selects `codex.cmd` even when an npm
+install has dropped an extensionless POSIX shim beside it — naming the `.cmd`
+explicitly is supported but not required.
+
+#### Model and reasoning effort
+
+Each provider table also takes an optional `model` and `effort`:
+
+```toml
+[providers.claude]
+executable = "claude"
+model      = "opus"
+effort     = "high"
+
+[providers.codex]
+executable = "codex"
+model      = "gpt-5.6-sol"
+effort     = "high"
+```
+
+Both are optional. Unset, nothing extra is added to the provider's argv and
+the provider CLI keeps choosing for itself — the behavior every earlier
+version had. Set, they become separate argument values on the invocation:
+`--model` plus `--effort` for Claude, and `--model` plus the
+`model_reasoning_effort` config override for Codex, which has no dedicated
+effort flag. Codex is invoked with `--ignore-user-config`, so a model or
+effort set in your own Codex configuration is deliberately not read; this
+registry is the only channel that reaches it.
+
+Where they apply:
+
+| Surface | Applies |
+|---|---|
+| `query` | yes |
+| `doctor --live` | yes |
+| version probe / authentication probe | no |
+| `doctor` (static) | no |
+| `list` | no |
+
+Static `doctor` validates only that the values are well-formed. It cannot
+tell you whether the provider actually offers that model, or whether that
+model supports that effort level — only `doctor --live` or a real `query`
+answers that, and an unsupported combination surfaces as an ordinary
+provider failure rather than a configuration error.
+
+Effort levels currently documented by each provider — a snapshot, not a
+closed set this tool enforces:
+
+- Claude: `low`, `medium`, `high`, `xhigh`, `max`
+- Codex: `minimal`, `low`, `medium`, `high`, `xhigh`
+
+A `model` is one alias or fully qualified model ID: non-empty, at most 128
+bytes, no control characters, no whitespace, and not starting with `-`. An
+`effort` is one short token of letters, digits, `_`, and `-`, at most 32
+bytes, starting with a letter or digit. Anything else fails at configuration
+load with `CONFIG_INVALID`.
+
+Changing `model` or `effort` invalidates a published `doctor --live` probe,
+exactly as changing `query_prompt` does: a verification run against one model
+does not vouch for another. Re-run `doctor --live` after changing either.
+
 ### 2.7 Project skills and Claude local plugins
 
 Two load modes exist per provider:
@@ -339,6 +440,33 @@ at the user level outside `llm-wikis`, it would never be consulted: Codex
 user configuration (and therefore any user-level plugin) is deliberately
 excluded from every query and doctor invocation.
 
+### 2.7a Claude wiki skills must declare `allowed-tools`
+
+`llm-wikis` invokes Claude with `--permission-mode dontAsk` (§3.4) — no
+approval prompt is ever shown, so a tool call that isn't already authorized
+is simply **denied**, not deferred. During the `/wiki-query` (or your
+wiki's own) skill turn, that authorization comes from the skill's own
+**`SKILL.md` `allowed-tools` frontmatter**, not from `--tools` alone. A
+wiki skill that omits `allowed-tools` gets its `Read`/`Grep`/`Glob` calls
+denied mid-turn, and the model falls back to an "unable to access wiki
+pages" answer instead of a grounded one — live-verified on Claude Code
+2.1.223 (2026-08-07): adding the frontmatter line fixed it immediately,
+with no other change. This holds regardless of `--setting-sources` (§3.4,
+layer 9) — verified identical before and after that flag was added.
+
+Every wiki you register for the Claude provider must therefore declare, in
+its skill's `SKILL.md` frontmatter:
+
+```yaml
+allowed-tools: Read, Grep, Glob
+```
+
+This is authoring guidance for the wiki's own skill file, not an
+`llm-wikis` configuration key — there is nothing to set in `config.toml`
+for it. Codex is unaffected: its read access comes from the read-only
+sandbox (§3.4, layer 10; §3.6), not from skill frontmatter, so no
+equivalent declaration is needed for `$name` entrypoints.
+
 ### 2.8 `llm-wikis` never modifies a knowledge base
 
 State this plainly to anyone operating this tool: **`llm-wikis` itself has
@@ -382,13 +510,15 @@ explicit, quota-consuming confirmation that the contract still holds.
 
 ```text
 llm-wikis --version
-llm-wikis [--config <absolute-path>] [--json] config init
+llm-wikis [--config <absolute-path>] [--json] config init [--yes] [--force]
+llm-wikis [--config <absolute-path>] [--json] config list
+llm-wikis [--config <absolute-path>] [--json] config validate
 llm-wikis [--config <absolute-path>] [--json] list
 llm-wikis [--config <absolute-path>] [--json] doctor [--wiki <id>] [--agent claude|codex] [--live]
-llm-wikis [--config <absolute-path>] [--json] query --wiki <id> [--agent claude|codex] -- <question>
+llm-wikis [--config <absolute-path>] [--json] query --wiki <id> [--agent claude|codex] [--plain] -- <question>
 ```
 
-`--version` prints `llm-wikis 0.1.0-beta.1`. `list` loads the registry and lists
+`--version` prints `llm-wikis 0.1.0-beta.4`. `list` loads the registry and lists
 every configured wiki **without starting a provider** — no model call, no
 live check. `doctor` without `--wiki`/`--agent` runs static checks (§3.7)
 for every configured wiki/provider pair; either selector narrows the
@@ -419,13 +549,81 @@ stdin data — never interpolated into a shell command string — so shell
 metacharacters, quotes, leading dashes, and multi-line/Unicode text all
 transport unchanged.
 
+When stderr is an interactive terminal, `query` shows a small spinner on
+stderr while the provider call is in flight, cleared before the answer (or
+error line) prints — this never appears in a piped, redirected, or CI
+invocation, and never emits anything to stdout at any point.
+
+When stdout is an interactive terminal, human-mode `query` renders the
+answer's markdown with terminal styling (headings, bold, lists, ...).
+`--plain` forces raw markdown output instead; a piped/redirected stdout or
+`NO_COLOR` (any value, per no-color.org — presence, not content, disables
+color) force it automatically, so an agent invoking this CLI through a pipe
+already gets raw markdown without needing `--plain` at all.
+
+#### The `[viewer]` section
+
+Rendering is done by [leaf](https://github.com/RivoLink/leaf), an external
+viewer that is **not bundled and never installed for you**:
+
+```toml
+[viewer]
+backend = "leaf"
+# executable = 'C:\Tools\leaf\leaf.exe'
+```
+
+- `backend = "leaf"` (the default) renders through `leaf --inline`.
+- `backend = "plain"` prints the model's markdown exactly as received. Nothing
+  needs to be installed for this.
+- `executable` is optional and only for a custom install location, a wrapper
+  script, or a machine with several versions. Omitted, the bare command `leaf`
+  is resolved on `PATH` — on Windows through `PATHEXT`, so `leaf.exe` is found
+  without naming the extension.
+
+leaf 1.21.0 or newer is required: `--inline` did not exist before it.
+
+**When the viewer runs at all.** Only for an interactive terminal. These all
+print raw markdown and never start it:
+
+| Situation | Viewer |
+|---|---|
+| stdout piped or redirected to a file | not started |
+| `--json` | not started |
+| `--plain` | not started |
+| `NO_COLOR` set to any value | not started |
+| `backend = "plain"` | not started |
+
+Redirected output therefore contains no ANSI escape sequences, and piped
+output stays exactly as machine-readable as it was before.
+
+**When the viewer fails.** The answer is never lost and the query is never
+re-run. llm-wikis collects the viewer's complete output before writing
+anything, so stdout receives either the rendered answer or the raw markdown —
+never a half-rendered answer followed by a second copy. A one-line warning
+goes to stderr, leaving stdout clean. This covers a missing binary, a viewer
+that cannot start, a non-zero exit, and a version too old for `--inline`.
+
+**Checking it.** `llm-wikis doctor` reports a `viewer` check. A missing or
+unusable viewer is a **warning**, not a failure, and doctor's exit code stays
+0 — losing formatting is not the same as losing answers. The check runs once
+per invocation and is reported under every wiki/agent pair.
+
+leaf reads its own user configuration and theme, and offers no flag to ignore
+them, so colors may differ between machines. llm-wikis deliberately does not
+override that: your leaf configuration is yours.
+
 ### 3.3 JSON envelopes and exit classes
 
 `--json` emits **exactly one** JSON document on stdout per invocation
 (`schema_version: "1.0"`), success or failure alike; human mode prints the
-answer, then gaps, then warnings, to stdout, with diagnostics on stderr.
-Every failure uses the same public `error: {code, message, details?}`
-object. The process exit code always equals the failure's documented class:
+answer, then gaps, then warnings, to stdout on success, with every
+diagnostic — including the human-mode error line itself, for every
+subcommand — on stderr instead. `query`'s human-mode answer is
+terminal-rendered markdown on a TTY, or raw markdown otherwise (§3.2). A failing human-mode invocation therefore
+prints nothing at all to stdout; the error line (`error: CODE (message)`)
+lands on stderr exclusively. Every failure uses the same public
+`error: {code, message, details?}` object. The process exit code always
+equals the failure's documented class:
 
 | Exit | Meaning |
 |---:|---|
@@ -527,11 +725,16 @@ layers stack:
    Read,Grep,Glob` restriction (layer 6) bounds the built-in tool surface
    regardless of any tool-related setting. These exist because the wiki's
    own settings are still loaded (required for skill discovery — excluding
-   them via `--setting-sources user` was tried and found to break every
-   `project_skill`-mode wiki's entrypoint). **Honest residual gap**: no CLI
-   flag can disable an admin-managed/enterprise-policy hook regardless of
-   any of the above — that is out of this project's scope, and the
-   implementation machine has no managed settings.
+   the `project` source entirely via `--setting-sources user` was tried and
+   found to break every `project_skill`-mode wiki's entrypoint). `--setting-sources
+   project` — the *opposite* exclusion, dropping only `user`/`local` while
+   keeping `project` — is used instead, added later to stop a user-level
+   plugin/hook from being loaded at all for this invocation (the source of a
+   `SessionEnd` "Hook cancelled" pollution symptom); it was live-verified not
+   to reproduce the `user`-value regression. **Honest residual gap**: no CLI
+   flag can disable an admin-managed/enterprise-policy hook or setting source
+   regardless of any of the above — that is out of this project's scope, and
+   the implementation machine has no managed settings.
 10. Codex runs under `--sandbox read-only`; the sandbox is a write-prevention
     guarantee only, not a read-scope limiter (§3.6).
 11. No session persistence on either provider.
