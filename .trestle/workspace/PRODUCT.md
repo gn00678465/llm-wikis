@@ -11,7 +11,9 @@ read-only: a full-content snapshot check rejects any run that would have
 mutated a wiki page. (Source: README.md, Cargo.toml `description`,
 docs/llm-wikis.md.)
 
-Current version: 0.1.0-beta.2 (Source: Cargo.toml; bump commit 682ddfc).
+Current version: 0.1.0-beta.4 (Source: Cargo.toml). Note: this line was
+stale at beta.2 through the beta.3 release — read Cargo.toml, not this line,
+when the two disagree.
 
 ## Current phase goals
 
